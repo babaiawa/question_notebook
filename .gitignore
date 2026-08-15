@@ -1,0 +1,7 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 数据备份
+questions.json.bak
