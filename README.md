@@ -105,8 +105,9 @@ CSV 导出文件存放在项目下 `exports/` 目录（UTF-8 BOM 编码，Excel 
 
 ```
 question_notebook/
-├── question_notebook.py   # CLI 版主程序
-├── web_app.py             # Web 版服务（Flask）
+├── models.py              # 📦 数据层：Question 类 + JSON 读写（CLI/Web 共用）
+├── question_notebook.py   # 🖥️ CLI 界面层：菜单、输入输出
+├── web_app.py             # 🌐 Web 界面层：Flask 路由
 ├── templates/
 │   └── index.html         # Web 版前端页面
 ├── questions.json         # 数据文件（首次运行自动生成）
@@ -117,16 +118,30 @@ question_notebook/
 
 ## 代码结构说明
 
-- `Question` 类：问题数据模型，包含标题、描述、状态、解决方案、分类、创建时间等属性
-- `save_questions()`：将问题列表序列化写入 JSON（含 ID 自动分配逻辑）
-- `load_questions()`：从 JSON 加载问题列表，文件不存在时返回空列表；旧数据缺 `category` 字段时自动补默认值
-- `print_questions()`：公共打印函数（查看全部/按状态筛选/按分类查看共用）
-- `add_question()` / `list_questions()` / `solve_question()` / `delete_question()` / `search_questions()` / `edit_question()` / `filter_questions()` / `view_by_category()`：对应八大功能
-- `backup_questions()` / `restore_questions()` / `backup_menu()`：备份与恢复（带时间戳、覆盖前二次确认）
+采用**分层模块化**设计（数据层 → 界面层），符合"单一职责"原则：
+
+**数据层 `models.py`**（唯一的数据入口）
+- `Question` 类：问题数据模型，`to_dict()` / `from_dict()` 负责序列化与反序列化
+- `load_questions()`：从 JSON 加载（文件不存在返回空列表；损坏时备份 `.bak` 后重建）
+- `save_questions()`：写入 JSON（新问题自动分配 ID）
+
+**CLI 界面层 `question_notebook.py`**
+- `add_question()` / `list_questions()` / `solve_question()` / `delete_question()` / `search_questions()` / `edit_question()` / `filter_questions()` / `view_by_category()`：八大功能
+- `backup_questions()` / `restore_questions()` / `backup_menu()`：备份与恢复
 - `export_csv()`：导出 CSV（UTF-8 BOM，Excel 友好）
+- `print_questions()`：公共打印函数
 - `main()`：程序入口，菜单循环 + 用户交互
 
+**Web 界面层 `web_app.py`**
+- REST API：`/api/questions`（增删改查）、`/api/export`、`/api/backup`、`/api/backups`、`/api/restore`
+- 与 CLI 共用 `models.py`，数据逻辑只有一份
+
 ## 更新日志
+
+**2026-08-15（第五批：模块化重构）**
+- 抽出 `models.py` 数据层：`Question` 类（含 `to_dict`/`from_dict` 序列化方法）+ 统一的数据读写
+- CLI 版瘦身为纯界面层，Web 版删除重复的数据读写代码，两者共用 `models.py`
+- 数据逻辑只维护一份：以后改数据结构、加字段、修 bug 都只动 `models.py`
 
 **2026-08-15（第四批：Web 版）**
 - 新增 Web 版（Flask + 原生 HTML/CSS/JS）：`python web_app.py` 启动，浏览器访问 http://127.0.0.1:5000

@@ -1,104 +1,28 @@
-import json
+# -*- coding: utf-8 -*-
+"""
+question_notebook.py - CLI 界面层（模块化重构后）
+
+只负责命令行交互（菜单、输入输出），数据逻辑全部来自 models.py。
+运行：python question_notebook.py
+"""
+import csv
 import datetime
 import os
 import shutil
-import csv
 
-# 基于脚本所在目录定位数据文件，避免从其他目录运行时跑偏
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(BASE_DIR, "questions.json")
-BACKUP_DIR = os.path.join(BASE_DIR, "backups")
-EXPORT_DIR = os.path.join(BASE_DIR, "exports")
-DEFAULT_CATEGORY = "未分类"
+from models import (
+    Question,
+    load_questions,
+    save_questions,
+    DATA_FILE,
+    BACKUP_DIR,
+    EXPORT_DIR,
+    DEFAULT_CATEGORY,
+)
 
-class Question:
-    """这是一个用来存储问题的类。包含问题的标题、描述、解决状态、解决方案、分类以及创建时间等相关信息。"""
-    def __init__(self, title, description="", is_solved=False, solution="", category=DEFAULT_CATEGORY):
-        self.id = None  # 程序内部自动生成
-        self.title = title
-        self.description = description
-        self.timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.is_solved = is_solved
-        self.solution = solution
-        self.category = category
-
-def save_questions(questions):
-    """将问题对象列表保存到JSON文件中。"""
-    
-    # 1. 找出当前最大的 ID，以便为新问题生成下一个 ID
-    # 如果列表为空，最大 ID 就是 0
-    max_id = 0
-    for q in questions:
-        if q.id is not None and q.id > max_id:
-            max_id = q.id
-
-    # 2. 将 Question 对象列表转换成字典列表
-    questions_as_dicts = []
-    for q in questions:
-        # 如果这个问题还没有 ID（说明是新添加的），就给它分配一个
-        if q.id is None:
-            max_id += 1
-            q.id = max_id
-            
-        # 把对象的属性提取出来，做成一个字典
-        q_dict = {
-            "id": q.id,
-            "title": q.title,
-            "description": q.description,
-            "timestamp": q.timestamp,
-            "is_solved": q.is_solved,
-            "solution": q.solution,
-            "category": q.category
-        }
-        questions_as_dicts.append(q_dict)
-
-    # 3. 将字典列表写入文件
-    with open(DATA_FILE, 'w', encoding='utf-8') as file:
-        json.dump(questions_as_dicts, file, indent=4, ensure_ascii=False)
-    
-    print("问题列表已成功保存！")
-
-def load_questions():
-    """从JSON文件中加载问题列表。如果文件不存在，则返回一个空列表。"""
-    try:
-        # 尝试打开文件
-        with open(DATA_FILE, 'r', encoding='utf-8') as file:
-            # 读取JSON数据
-            data = json.load(file)
-            
-            questions = []
-            for item in data:
-                # get() 带默认值：兼容旧数据（没有 category 字段时补"未分类"）
-                q = Question(
-                    title=item['title'],
-                    description=item.get('description', ''),
-                    is_solved=item.get('is_solved', False),
-                    solution=item.get('solution', ''),
-                    category=item.get('category', DEFAULT_CATEGORY)
-                )
-                q.id = item['id']
-                q.timestamp = item.get('timestamp', '')
-                questions.append(q)
-            
-            print(f"成功从 {DATA_FILE} 加载了 {len(questions)} 个问题。")
-            return questions
-            
-    except FileNotFoundError:
-        # 如果文件不存在，我们捕获这个异常，并返回一个空列表
-        print(f"数据文件 {DATA_FILE} 不存在，将创建一个新的文件。")
-        return []
-    except json.JSONDecodeError:
-        # JSON 文件损坏时，备份原文件后返回空列表，避免程序崩溃
-        backup_file = DATA_FILE + ".bak"
-        try:
-            os.replace(DATA_FILE, backup_file)
-            print(f"[警告] 数据文件损坏，已备份到 {backup_file}，将创建一个新的文件。")
-        except OSError:
-            print("[警告] 数据文件损坏且无法备份，将创建一个新的文件。")
-        return []
 
 def print_questions(questions, header, empty_msg="当前空空如也，快去添加第一个问题吧！"):
-    """格式化打印问题列表（查看全部/筛选共用）。"""
+    """格式化打印问题列表（查看全部/筛选/分类查看共用）。"""
     print(f"\n{header}")
     
     # 如果列表为空，给出提示
@@ -141,7 +65,7 @@ def add_question(questions):
     # 将新问题加入到列表中
     questions.append(new_q)
     
-    # 调用我们之前写好的保存函数
+    # 调用数据层保存
     save_questions(questions)
     print(f"问题 '{title}' 已成功添加并保存！")
 
@@ -372,7 +296,7 @@ def restore_questions(questions):
     shutil.copy2(os.path.join(BACKUP_DIR, backup_name), DATA_FILE)
     questions.clear()
     questions.extend(load_questions())
-    print("[成功] 数据已恢复！")
+    print(f"[成功] 数据已恢复！共 {len(questions)} 条问题。")
 
 def backup_menu(questions):
     """备份与恢复子菜单。"""
@@ -457,7 +381,13 @@ def view_by_category(questions):
 
 def main():
     """程序的主入口，负责显示菜单和处理用户交互。"""
-    questions = load_questions()
+    # 从数据层加载（文件不存在时给出提示，不报错）
+    if os.path.exists(DATA_FILE):
+        questions = load_questions()
+        print(f"成功从 {DATA_FILE} 加载了 {len(questions)} 个问题。")
+    else:
+        questions = []
+        print(f"数据文件 {DATA_FILE} 不存在，将创建一个新的文件。")
     
     while True:
         print("\n=========================")
