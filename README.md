@@ -156,18 +156,20 @@ python web_app.py
 
 ## 数据存储
 
-数据文件：项目根目录 `questions.json`，格式如下：
+数据文件：项目根目录 `questions.json`，内容为**问题对象数组**，格式如下：
 
 ```json
-{
-    "id": 1,
-    "title": "问题标题",
-    "description": "问题详细描述",
-    "timestamp": "2026-07-24 11:10:38",
-    "is_solved": false,
-    "solution": "解决方案（未解决时为空字符串）",
-    "category": "未分类"
-}
+[
+    {
+        "id": 1,
+        "title": "问题标题",
+        "description": "问题详细描述",
+        "timestamp": "2026-07-24 11:10:38",
+        "is_solved": false,
+        "solution": "解决方案（未解决时为空字符串）",
+        "category": "未分类"
+    }
+]
 ```
 
 ### 字段说明

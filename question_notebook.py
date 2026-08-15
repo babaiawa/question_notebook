@@ -5,15 +5,17 @@ question_notebook.py - CLI 界面层
 负责命令行交互（菜单、输入输出），数据逻辑由 models.py 提供。
 运行：python question_notebook.py
 """
-import csv
 import datetime
 import os
-import shutil
 
 from models import (
     Question,
     load_questions,
     save_questions,
+    build_csv,
+    backup_data,
+    list_backups,
+    restore_data,
     DATA_FILE,
     BACKUP_DIR,
     EXPORT_DIR,
@@ -239,30 +241,20 @@ def filter_questions(questions):
 
 
 def backup_questions():
-    """将当前数据文件备份到 backups/ 目录（带时间戳）。"""
+    """将当前数据文件备份到 backups/ 目录（带时间戳，由数据层处理）。"""
     print("\n--- [b] 备份数据 ---")
-    if not os.path.exists(DATA_FILE):
+    name = backup_data()
+    if name is None:
         print("[提示] 还没有数据文件，无需备份。")
         return
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(BACKUP_DIR, f"questions_{timestamp}.json")
-    shutil.copy2(DATA_FILE, backup_path)
-    print(f"[成功] 已备份到 {backup_path}")
+    print(f"[成功] 已备份到 {os.path.join(BACKUP_DIR, name)}")
 
 
 def restore_questions(questions):
     """从备份文件恢复数据（覆盖当前数据前二次确认）。"""
     print("\n--- [r] 恢复数据 ---")
-    if not os.path.isdir(BACKUP_DIR):
-        print("[提示] 还没有任何备份。")
-        return
-
-    # 列出所有备份文件，新的在前
-    backups = sorted(
-        [f for f in os.listdir(BACKUP_DIR) if f.startswith("questions_") and f.endswith(".json")],
-        reverse=True
-    )
+    # 列出所有备份文件，新的在前（数据层统一逻辑）
+    backups = list_backups()
     if not backups:
         print("[提示] 还没有任何备份。")
         return
@@ -290,8 +282,10 @@ def restore_questions(questions):
         print("[提示] 已取消恢复。")
         return
 
-    # 覆盖数据文件并重新加载到内存
-    shutil.copy2(os.path.join(BACKUP_DIR, backup_name), DATA_FILE)
+    # 数据层执行恢复（含文件名白名单校验），成功后在内存中重新加载
+    if not restore_data(backup_name):
+        print("[错误] 恢复失败，备份文件无效。")
+        return
     questions.clear()
     questions.extend(load_questions())
     print(f"[成功] 数据已恢复！共 {len(questions)} 条问题。")
@@ -328,15 +322,9 @@ def export_csv(questions):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     export_path = os.path.join(EXPORT_DIR, f"questions_{timestamp}.csv")
 
-    # utf-8-sig 写入 BOM 头，Excel 才能正确识别 UTF-8
-    with open(export_path, 'w', encoding='utf-8-sig', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["ID", "标题", "描述", "创建时间", "是否已解决", "解决方案", "分类"])
-        for q in questions:
-            writer.writerow([
-                q.id, q.title, q.description, q.timestamp,
-                "是" if q.is_solved else "否", q.solution, q.category
-            ])
+    # 内容由数据层生成（含 BOM 头），界面层只负责写文件
+    with open(export_path, 'w', encoding='utf-8', newline='') as file:
+        file.write(build_csv(questions))
 
     print(f"[成功] 已导出 {len(questions)} 条问题到 {export_path}")
 
