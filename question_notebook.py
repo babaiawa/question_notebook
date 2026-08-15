@@ -1,19 +1,24 @@
 import json
 import datetime
 import os
+import shutil
 
 # 基于脚本所在目录定位数据文件，避免从其他目录运行时跑偏
-DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "questions.json")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.path.join(BASE_DIR, "questions.json")
+BACKUP_DIR = os.path.join(BASE_DIR, "backups")
+DEFAULT_CATEGORY = "未分类"
 
 class Question:
-    """这是一个用来存储问题的类。包含问题的标题、描述、解决状态、解决方案以及创建时间等相关信息。"""
-    def __init__(self, title, description="", is_solved=False, solution=""):
+    """这是一个用来存储问题的类。包含问题的标题、描述、解决状态、解决方案、分类以及创建时间等相关信息。"""
+    def __init__(self, title, description="", is_solved=False, solution="", category=DEFAULT_CATEGORY):
         self.id = None  # 程序内部自动生成
         self.title = title
         self.description = description
         self.timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.is_solved = is_solved
         self.solution = solution
+        self.category = category
 
 def save_questions(questions):
     """将问题对象列表保存到JSON文件中。"""
@@ -40,7 +45,8 @@ def save_questions(questions):
             "description": q.description,
             "timestamp": q.timestamp,
             "is_solved": q.is_solved,
-            "solution": q.solution
+            "solution": q.solution,
+            "category": q.category
         }
         questions_as_dicts.append(q_dict)
 
@@ -58,13 +64,18 @@ def load_questions():
             # 读取JSON数据
             data = json.load(file)
             
-            # TODO: 这里需要将字典列表转换回 Question 对象列表
-            # 你可以先直接返回 data，让程序能跑通
             questions = []
             for item in data:
-                q = Question(title=item['title'], description=item['description'], is_solved=item['is_solved'], solution=item['solution'])
+                # get() 带默认值：兼容旧数据（没有 category 字段时补"未分类"）
+                q = Question(
+                    title=item['title'],
+                    description=item.get('description', ''),
+                    is_solved=item.get('is_solved', False),
+                    solution=item.get('solution', ''),
+                    category=item.get('category', DEFAULT_CATEGORY)
+                )
                 q.id = item['id']
-                q.timestamp = item['timestamp']
+                q.timestamp = item.get('timestamp', '')
                 questions.append(q)
             
             print(f"成功从 {DATA_FILE} 加载了 {len(questions)} 个问题。")
@@ -84,6 +95,27 @@ def load_questions():
             print("[警告] 数据文件损坏且无法备份，将创建一个新的文件。")
         return []
 
+def print_questions(questions, header, empty_msg="当前空空如也，快去添加第一个问题吧！"):
+    """格式化打印问题列表（查看全部/筛选共用）。"""
+    print(f"\n{header}")
+    
+    # 如果列表为空，给出提示
+    if not questions:
+        print(empty_msg)
+        return
+        
+    # 遍历列表，打印每个问题的信息
+    for q in questions:
+        # 使用三元表达式（类似 C 语言的 ? : ）来决定显示的状态图标
+        status = "已解决" if q.is_solved else "未解决"
+        
+        print(f"[{q.id}] {q.title}  | 分类: {q.category}  | 状态: {status}  | 时间: {q.timestamp}")
+        if q.description:
+            print(f"描述: {q.description}")
+        if q.is_solved and q.solution:
+            print(f"方案: {q.solution}")
+        print("-" * 40) # 打印分割线
+
 def add_question(questions):
     """提示用户输入信息，创建新问题并保存。"""
     print("\n--- 添加新问题 ---")
@@ -97,9 +129,12 @@ def add_question(questions):
         return
         
     description = input("请输入问题详细描述 (可选，直接按回车跳过): ")
+    category = input(f"请输入分类 (可选，直接回车默认为'{DEFAULT_CATEGORY}'): ").strip()
+    if not category:
+        category = DEFAULT_CATEGORY
     
     # 使用收集到的信息创建 Question 对象
-    new_q = Question(title=title, description=description)
+    new_q = Question(title=title, description=description, category=category)
     
     # 将新问题加入到列表中
     questions.append(new_q)
@@ -110,24 +145,7 @@ def add_question(questions):
 
 def list_questions(questions):
     """格式化打印出所有的问题。"""
-    print("\n--- 我的问题笔记本 ---")
-    
-    # 如果列表为空，给出提示
-    if not questions:
-        print("当前空空如也，快去添加第一个问题吧！")
-        return
-        
-    # 遍历列表，打印每个问题的信息
-    for q in questions:
-        # 使用三元表达式（类似 C 语言的 ? : ）来决定显示的状态图标
-        status = "已解决" if q.is_solved else "未解决"
-        
-        print(f"[{q.id}] {q.title}  | 状态: {status}  | 时间: {q.timestamp}")
-        if q.description:
-            print(f"描述: {q.description}")
-        if q.is_solved and q.solution:
-            print(f"方案: {q.solution}")
-        print("-" * 40) # 打印分割线
+    print_questions(questions, "--- 我的问题笔记本 ---")
 
 def solve_question(questions):
     """将指定ID的问题标记为已解决，并添加解决方案。"""
@@ -196,7 +214,7 @@ def delete_question(questions):
         print(f"[成功] ID为 {q_id} 的问题已被永久删除。")
 
 def search_questions(questions):
-    """根据关键词搜索问题（忽略大小写）。"""
+    """根据关键词搜索问题（忽略大小写，匹配标题/描述/方案/分类）。"""
     print("\n--- [?] 搜索问题 ---")
     keyword = input("请输入搜索关键词: ").strip()
     
@@ -213,12 +231,13 @@ def search_questions(questions):
         # 将目标文本也转为小写，然后用 in 判断是否包含
         title_match = keyword_lower in q.title.lower()
         
-        # 如果描述或方案为空，直接设为 False，防止报错
+        # 如果描述、方案或分类为空，直接设为 False，防止报错
         desc_match = keyword_lower in q.description.lower() if q.description else False
         sol_match = keyword_lower in q.solution.lower() if q.solution else False
+        cat_match = keyword_lower in q.category.lower() if q.category else False
         
-        # 只要标题、描述、方案中有任何一个匹配，就加入结果列表
-        if title_match or desc_match or sol_match:
+        # 标题、描述、方案、分类中有任何一个匹配就加入结果列表
+        if title_match or desc_match or sol_match or cat_match:
             results.append(q)
             
     # 打印搜索结果
@@ -228,10 +247,10 @@ def search_questions(questions):
         print(f"[结果] 找到 {len(results)} 个匹配的问题：")
         for q in results:
             status = "[已解决]" if q.is_solved else "[未解决]"
-            print(f"  - [{q.id}] {q.title} {status}")        
+            print(f"  - [{q.id}] {q.title} ({q.category}) {status}")
 
 def edit_question(questions):
-    """根据ID编辑问题，可修改标题、描述和解决方案（直接回车表示该项保持不变）。"""
+    """根据ID编辑问题，可修改标题、描述、分类和解决方案（直接回车表示该项保持不变）。"""
     print("\n--- [e] 编辑问题 ---")
     try:
         q_id = int(input("请输入要编辑的问题ID: "))
@@ -262,6 +281,11 @@ def edit_question(questions):
     if new_desc:
         target_q.description = new_desc
 
+    print(f"当前分类: {target_q.category}")
+    new_category = input("请输入新分类 (直接回车保持不变): ").strip()
+    if new_category:
+        target_q.category = new_category
+
     if target_q.is_solved:
         print(f"当前解决方案: {target_q.solution or '(空)'}")
         new_solution = input("请输入新解决方案 (直接回车保持不变): ").strip()
@@ -270,6 +294,100 @@ def edit_question(questions):
 
     save_questions(questions)
     print(f"[成功] 问题 '{old_title}' 已更新为 '{target_q.title}'！")
+
+def filter_questions(questions):
+    """按解决状态筛选问题（只看未解决/已解决）。"""
+    print("\n--- [f] 按状态筛选 ---")
+    print("  1. 只看未解决")
+    print("  2. 只看已解决")
+    print("  0. 返回主菜单")
+    choice = input(">> 请选择: ").strip()
+    
+    if choice == '1':
+        filtered = [q for q in questions if not q.is_solved]
+        print_questions(filtered, "--- 未解决的问题 ---", "太棒了，没有未解决的问题！")
+    elif choice == '2':
+        filtered = [q for q in questions if q.is_solved]
+        print_questions(filtered, "--- 已解决的问题 ---", "还没有已解决的问题，加油！")
+    elif choice == '0':
+        return
+    else:
+        print("[警告] 无效输入。")
+
+def backup_questions():
+    """将当前数据文件备份到 backups/ 目录（带时间戳）。"""
+    print("\n--- [b] 备份数据 ---")
+    if not os.path.exists(DATA_FILE):
+        print("[提示] 还没有数据文件，无需备份。")
+        return
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = os.path.join(BACKUP_DIR, f"questions_{timestamp}.json")
+    shutil.copy2(DATA_FILE, backup_path)
+    print(f"[成功] 已备份到 {backup_path}")
+
+def restore_questions(questions):
+    """从备份文件恢复数据（覆盖当前数据前二次确认）。"""
+    print("\n--- [r] 恢复数据 ---")
+    if not os.path.isdir(BACKUP_DIR):
+        print("[提示] 还没有任何备份。")
+        return
+    
+    # 列出所有备份文件，新的在前
+    backups = sorted(
+        [f for f in os.listdir(BACKUP_DIR) if f.startswith("questions_") and f.endswith(".json")],
+        reverse=True
+    )
+    if not backups:
+        print("[提示] 还没有任何备份。")
+        return
+    
+    print("可用的备份：")
+    for i, name in enumerate(backups, 1):
+        print(f"  {i}. {name}")
+    
+    try:
+        choice = int(input("请输入要恢复的备份编号 (0 取消): "))
+    except ValueError:
+        print("[错误] 编号必须是数字！")
+        return
+    
+    if choice == 0:
+        print("[提示] 已取消恢复。")
+        return
+    if choice < 1 or choice > len(backups):
+        print("[错误] 无效的备份编号。")
+        return
+    
+    backup_name = backups[choice - 1]
+    confirm = input(f"恢复将覆盖当前全部数据，确认从 {backup_name} 恢复吗？(y/N): ").strip().lower()
+    if confirm != 'y':
+        print("[提示] 已取消恢复。")
+        return
+    
+    # 覆盖数据文件并重新加载到内存
+    shutil.copy2(os.path.join(BACKUP_DIR, backup_name), DATA_FILE)
+    questions.clear()
+    questions.extend(load_questions())
+    print("[成功] 数据已恢复！")
+
+def backup_menu(questions):
+    """备份与恢复子菜单。"""
+    while True:
+        print("\n--- 备份与恢复 ---")
+        print("  1. 备份当前数据")
+        print("  2. 从备份恢复")
+        print("  0. 返回主菜单")
+        choice = input(">> 请选择: ").strip()
+        
+        if choice == '1':
+            backup_questions()
+        elif choice == '2':
+            restore_questions(questions)
+        elif choice == '0':
+            return
+        else:
+            print("[警告] 无效输入。")
 
 def main():
     """程序的主入口，负责显示菜单和处理用户交互。"""
@@ -285,6 +403,8 @@ def main():
         print("  4. 删除问题")
         print("  5. 搜索问题")
         print("  6. 编辑问题")
+        print("  7. 备份与恢复")
+        print("  8. 按状态筛选")
         print("  0. 退出程序")
         print("=========================")
         
@@ -302,11 +422,15 @@ def main():
             search_questions(questions)
         elif choice == '6':
             edit_question(questions)
+        elif choice == '7':
+            backup_menu(questions)
+        elif choice == '8':
+            filter_questions(questions)
         elif choice == '0':
             print("感谢使用，再见！")
             break
         else:
-            print("[警告] 无效输入，请输入 0-6 之间的数字。")
+            print("[警告] 无效输入，请输入 0-8 之间的数字。")
 
 if __name__ == "__main__":
     main()
