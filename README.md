@@ -8,10 +8,12 @@
 - 📋 **查看全部**：按列表展示所有问题，含分类、状态和时间
 - ✅ **标记已解决**：为问题补充解决方案/心得
 - 🗑️ **删除问题**：按 ID 删除（带二次确认，防误删）
-- 🔍 **搜索问题**：按关键词匹配标题、描述、解决方案、分类（忽略大小写）
+- 🔍 **搜索问题**：支持多关键词（空格分隔，全部命中才算），匹配标题、描述、解决方案、分类（忽略大小写）
 - ✏️ **编辑问题**：修改标题、描述、分类、解决方案（回车跳过表示不改）
 - 💾 **备份与恢复**：一键备份带时间戳，可从备份恢复数据（覆盖前二次确认）
 - 🎯 **按状态筛选**：只看未解决 / 只看已解决
+- 📊 **导出 CSV**：导出为 Excel 可直接打开的 CSV（UTF-8 BOM，中文不乱码）
+- 🗂️ **按分类查看**：列出所有分类，选一个只看该分类的问题
 - 🔄 **自动持久化**：数据以 JSON 格式保存在本地，重启不丢失
 
 ## 环境要求
@@ -40,6 +42,8 @@ python question_notebook.py
   6. 编辑问题
   7. 备份与恢复
   8. 按状态筛选
+  9. 导出 CSV
+  10. 按分类查看
   0. 退出程序
 =========================
 ```
@@ -73,6 +77,7 @@ python question_notebook.py
 | `category` | 问题分类，默认`未分类`（旧数据自动兼容） |
 
 备份文件存放在项目下 `backups/` 目录，文件名带时间戳（如 `questions_20260815_1747.json`）。
+CSV 导出文件存放在项目下 `exports/` 目录（UTF-8 BOM 编码，Excel 直接打开不乱码）。
 
 ## 项目结构
 
@@ -81,6 +86,7 @@ question_notebook/
 ├── question_notebook.py   # 主程序（入口）
 ├── questions.json         # 数据文件（首次运行自动生成）
 ├── backups/               # 备份目录（备份时自动创建）
+├── exports/               # CSV 导出目录（导出时自动创建）
 └── README.md              # 项目文档
 ```
 
@@ -89,12 +95,18 @@ question_notebook/
 - `Question` 类：问题数据模型，包含标题、描述、状态、解决方案、分类、创建时间等属性
 - `save_questions()`：将问题列表序列化写入 JSON（含 ID 自动分配逻辑）
 - `load_questions()`：从 JSON 加载问题列表，文件不存在时返回空列表；旧数据缺 `category` 字段时自动补默认值
-- `print_questions()`：公共打印函数（查看全部/按状态筛选共用）
-- `add_question()` / `list_questions()` / `solve_question()` / `delete_question()` / `search_questions()` / `edit_question()` / `filter_questions()`：对应七大功能
+- `print_questions()`：公共打印函数（查看全部/按状态筛选/按分类查看共用）
+- `add_question()` / `list_questions()` / `solve_question()` / `delete_question()` / `search_questions()` / `edit_question()` / `filter_questions()` / `view_by_category()`：对应八大功能
 - `backup_questions()` / `restore_questions()` / `backup_menu()`：备份与恢复（带时间戳、覆盖前二次确认）
+- `export_csv()`：导出 CSV（UTF-8 BOM，Excel 友好）
 - `main()`：程序入口，菜单循环 + 用户交互
 
 ## 更新日志
+
+**2026-08-15（第三批）**
+- 新增「导出 CSV」功能（菜单选项 9）：导出到 `exports/` 目录，UTF-8 BOM 编码，Excel 直接打开中文不乱码
+- 新增「按分类查看」功能（菜单选项 10）：列出所有分类及问题数，选编号查看
+- 搜索升级：支持空格分隔多关键词（AND 逻辑，全部命中才算），匹配范围含分类
 
 **2026-08-15（第二批）**
 - 新增「备份与恢复」功能（菜单选项 7）：一键备份到 `backups/` 目录（带时间戳），可从备份恢复，覆盖前二次确认
@@ -111,6 +123,6 @@ question_notebook/
 
 ## 后续计划
 
-- [ ] 数据导出为 CSV（可用 Excel 打开）
-- [ ] 按分类查看问题
-- [ ] 多关键词组合搜索
+- [ ] 数据导入（从 CSV 或备份文件导入）
+- [ ] 问题统计（按分类/状态汇总图表）
+- [ ] GUI 界面版本（Tkinter）

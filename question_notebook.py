@@ -2,11 +2,13 @@ import json
 import datetime
 import os
 import shutil
+import csv
 
 # 基于脚本所在目录定位数据文件，避免从其他目录运行时跑偏
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "questions.json")
 BACKUP_DIR = os.path.join(BASE_DIR, "backups")
+EXPORT_DIR = os.path.join(BASE_DIR, "exports")
 DEFAULT_CATEGORY = "未分类"
 
 class Question:
@@ -214,35 +216,36 @@ def delete_question(questions):
         print(f"[成功] ID为 {q_id} 的问题已被永久删除。")
 
 def search_questions(questions):
-    """根据关键词搜索问题（忽略大小写，匹配标题/描述/方案/分类）。"""
+    """根据关键词搜索问题（忽略大小写，匹配标题/描述/方案/分类）。
+    支持空格分隔多个关键词，全部命中才算匹配（如：python 报错）。"""
     print("\n--- [?] 搜索问题 ---")
-    keyword = input("请输入搜索关键词: ").strip()
+    keyword = input("请输入搜索关键词 (多个词用空格分隔，如: python 报错): ").strip()
     
     if not keyword:
         print("[提示] 关键词不能为空。")
         return
         
-    # 将搜索词统一转为小写
-    keyword_lower = keyword.lower()
+    # 将搜索词按空格拆分成多个关键词，统一转为小写
+    keywords = [k.lower() for k in keyword.split()]
     results = []
     
     # 遍历所有问题进行比对
     for q in questions:
-        # 将目标文本也转为小写，然后用 in 判断是否包含
-        title_match = keyword_lower in q.title.lower()
+        # 把该问题的所有可搜索文本拼起来（标题/描述/方案/分类），统一小写
+        searchable_text = " ".join([
+            q.title,
+            q.description or "",
+            q.solution or "",
+            q.category or ""
+        ]).lower()
         
-        # 如果描述、方案或分类为空，直接设为 False，防止报错
-        desc_match = keyword_lower in q.description.lower() if q.description else False
-        sol_match = keyword_lower in q.solution.lower() if q.solution else False
-        cat_match = keyword_lower in q.category.lower() if q.category else False
-        
-        # 标题、描述、方案、分类中有任何一个匹配就加入结果列表
-        if title_match or desc_match or sol_match or cat_match:
+        # 所有关键词都必须命中（AND 逻辑）
+        if all(k in searchable_text for k in keywords):
             results.append(q)
             
     # 打印搜索结果
     if not results:
-        print(f"[结果] 没有找到包含 '{keyword}' 的问题。")
+        print(f"[结果] 没有找到同时包含 {keywords} 的问题。")
     else:
         print(f"[结果] 找到 {len(results)} 个匹配的问题：")
         for q in results:
@@ -389,6 +392,69 @@ def backup_menu(questions):
         else:
             print("[警告] 无效输入。")
 
+def export_csv(questions):
+    """将问题列表导出为 CSV 文件（UTF-8 BOM，Excel 直接打开不乱码）。"""
+    print("\n--- [c] 导出 CSV ---")
+    
+    if not questions:
+        print("[提示] 当前没有数据可导出。")
+        return
+    
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    export_path = os.path.join(EXPORT_DIR, f"questions_{timestamp}.csv")
+    
+    # encoding='utf-8-sig' 会写入 BOM 头，Excel 打开中文不乱码
+    with open(export_path, 'w', encoding='utf-8-sig', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["ID", "标题", "描述", "创建时间", "是否已解决", "解决方案", "分类"])
+        for q in questions:
+            writer.writerow([
+                q.id, q.title, q.description, q.timestamp,
+                "是" if q.is_solved else "否", q.solution, q.category
+            ])
+    
+    print(f"[成功] 已导出 {len(questions)} 条问题到 {export_path}")
+
+def view_by_category(questions):
+    """按分类查看问题。"""
+    print("\n--- [g] 按分类查看 ---")
+    
+    if not questions:
+        print("[提示] 当前没有数据。")
+        return
+    
+    # 收集所有分类（去重，保持出现顺序）
+    categories = []
+    for q in questions:
+        if q.category not in categories:
+            categories.append(q.category)
+    
+    print("现有分类：")
+    for i, cat in enumerate(categories, 1):
+        # 统计每个分类下的问题数
+        count = sum(1 for q in questions if q.category == cat)
+        print(f"  {i}. {cat} ({count} 条)")
+    print("  0. 返回主菜单")
+    
+    choice = input(">> 请选择分类编号: ").strip()
+    if choice == '0':
+        return
+    
+    try:
+        idx = int(choice)
+    except ValueError:
+        print("[错误] 请输入数字编号。")
+        return
+    
+    if idx < 1 or idx > len(categories):
+        print("[错误] 无效的分类编号。")
+        return
+    
+    selected = categories[idx - 1]
+    filtered = [q for q in questions if q.category == selected]
+    print_questions(filtered, f"--- 分类「{selected}」的问题 ---", f"分类「{selected}」下暂时没有问题。")
+
 def main():
     """程序的主入口，负责显示菜单和处理用户交互。"""
     questions = load_questions()
@@ -405,6 +471,8 @@ def main():
         print("  6. 编辑问题")
         print("  7. 备份与恢复")
         print("  8. 按状态筛选")
+        print("  9. 导出 CSV")
+        print("  10. 按分类查看")
         print("  0. 退出程序")
         print("=========================")
         
@@ -426,11 +494,15 @@ def main():
             backup_menu(questions)
         elif choice == '8':
             filter_questions(questions)
+        elif choice == '9':
+            export_csv(questions)
+        elif choice == '10':
+            view_by_category(questions)
         elif choice == '0':
             print("感谢使用，再见！")
             break
         else:
-            print("[警告] 无效输入，请输入 0-8 之间的数字。")
+            print("[警告] 无效输入，请输入 0-10 之间的数字。")
 
 if __name__ == "__main__":
     main()
