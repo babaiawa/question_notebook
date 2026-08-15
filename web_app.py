@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-web_app.py - Web 界面层（模块化重构后）
+web_app.py - Web 界面层
 
-只负责 Flask 路由和 HTTP 交互，数据逻辑全部来自 models.py。
+负责 Flask 路由和 HTTP 交互，数据逻辑由 models.py 提供。
 运行：python web_app.py  →  浏览器打开 http://127.0.0.1:5000
 """
 import json
@@ -14,6 +14,7 @@ import shutil
 
 from flask import Flask, request, jsonify, render_template, send_file
 
+# 数据模型与路径常量统一来自数据层 models.py
 from models import (
     Question,
     load_questions,
