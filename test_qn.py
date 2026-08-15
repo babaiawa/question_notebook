@@ -258,11 +258,21 @@ class TestCLI(unittest.TestCase):
 
 @unittest.skipUnless(HAS_FLASK, "未安装 Flask，跳过 Web 接口测试")
 class TestWeb(unittest.TestCase):
-    """Web 接口层测试（Flask test_client，无需启动真实服务）"""
+    """Web 接口层测试（Flask test_client，无需启动真实服务）。
+
+    注意：Web 端启用了 CSRF 防护，所有非 GET 请求都要带上 session 里的
+    CSRF Token。通过 _open_session() 获取带 token 的客户端后，用
+    _csrf_json / _csrf_raw 方法在请求里加上 X-CSRF-Token 头。
+    """
 
     @classmethod
     def setUpClass(cls):
+        # 测试环境不设置 QUESTION_NOTEBOOK_PASSWORD：
+        # AUTH_ENABLED=False，等价于原有未登录状态下的免登录访问。
+        # 用 TESTING=True 关闭 CSRF 的 session-permanent 校验需要的 cookie 行为。
         import web_app
+        web_app.app.config["TESTING"] = True
+        cls.app = web_app.app
         cls.client = web_app.app.test_client()
 
     def setUp(self):
@@ -271,104 +281,278 @@ class TestWeb(unittest.TestCase):
         models.DATA_FILE = os.path.join(self.tmpdir, "questions.json")
         models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
         models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
+        # 测试客户端：复用 cookies/session，确保 CSRF token 与请求同源
+        self.c = self.app.test_client()
+        # 先 GET 一次首页或 csrf 接口，建立会话并拿到 CSRF token
+        r = self.c.get('/api/csrf')
+        self._csrf = r.get_json()["token"]
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def _post_json(self, url, payload):
-        return self.client.post(
-            url,
-            data=json.dumps(payload) if payload is not None else '',
-            content_type='application/json'
-        )
+    # ---------- 带 CSRF 头的请求辅助 ----------
+
+    def _with_csrf(self, kwargs):
+        """在请求 headers 中注入 X-CSRF-Token。"""
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers.setdefault("X-CSRF-Token", self._csrf)
+        kwargs["headers"] = headers
+
+    def _csrf_get(self, url, **kw):
+        return self.c.get(url, **kw)
+
+    def _csrf_json(self, url, payload, method="POST"):
+        """发送带 CSRF 头和 JSON body 的请求。
+        payload 为 None 表示发送空 body（用于 CSRF 防护校验测试）。"""
+        kw = {}
+        if payload is None:
+            kw["data"] = ""
+            kw["content_type"] = "application/json"
+        else:
+            kw["json"] = payload
+        self._with_csrf(kw)
+        return self.c.open(url, method=method, **kw)
+
+    def _csrf_put_json(self, url, payload):
+        return self._csrf_json(url, payload, method="PUT")
+
+    def _csrf_delete(self, url):
+        kw = {}
+        self._with_csrf(kw)
+        return self.c.delete(url, **kw)
+
+    # ---------- 原有业务测试 ----------
 
     def test_crud_flow(self):
         """增删改查全链路"""
-        r = self.client.get('/api/questions')
+        r = self._csrf_get('/api/questions')
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json(), [])
 
-        r = self._post_json('/api/questions', {"title": "Web测试", "category": "测试"})
+        r = self._csrf_json('/api/questions', {"title": "Web测试", "category": "测试"})
         self.assertEqual(r.status_code, 201)
         qid = r.get_json()["id"]
-        self.assertEqual(len(self.client.get('/api/questions').get_json()), 1)
+        self.assertEqual(len(self._csrf_get('/api/questions').get_json()), 1)
 
-        r = self.client.put(f'/api/questions/{qid}',
-                            json={"is_solved": True, "solution": "方案"})
+        r = self._csrf_put_json(f'/api/questions/{qid}',
+                                {"is_solved": True, "solution": "方案"})
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.get_json()["is_solved"])
 
-        r = self.client.delete(f'/api/questions/{qid}')
+        r = self._csrf_delete(f'/api/questions/{qid}')
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(self.client.get('/api/questions').get_json(), [])
+        self.assertEqual(self._csrf_get('/api/questions').get_json(), [])
 
     def test_bad_bodies(self):
         """空 body / 非对象 JSON 一律 400"""
-        r = self.client.post('/api/questions', data='', content_type='application/json')
+        r = self.c.post('/api/questions', data='',
+                        content_type='application/json',
+                        headers={'X-CSRF-Token': self._csrf})
         self.assertEqual(r.status_code, 400)
         for bad in ([1, 2, 3], "abc", 123):
-            r = self._post_json('/api/questions', bad)
+            r = self._csrf_json('/api/questions', bad)
             self.assertEqual(r.status_code, 400, f"body={bad!r}")
             self.assertIn("error", r.get_json())
 
     def test_empty_title(self):
         """标题为空返回 400"""
-        r = self._post_json('/api/questions', {"title": "   "})
+        r = self._csrf_json('/api/questions', {"title": "   "})
         self.assertEqual(r.status_code, 400)
 
     def test_is_solved_type_check(self):
         """is_solved 必须是布尔：字符串 'false' 应被拒绝"""
-        r = self._post_json('/api/questions', {"title": "布尔测试"})
+        r = self._csrf_json('/api/questions', {"title": "布尔测试"})
         qid = r.get_json()["id"]
-        r = self.client.put(f'/api/questions/{qid}', json={"is_solved": "false"})
+        r = self._csrf_put_json(f'/api/questions/{qid}', {"is_solved": "false"})
         self.assertEqual(r.status_code, 400)
         self.assertIn("布尔", r.get_json()["error"])
-        r = self.client.put(f'/api/questions/{qid}', json={"is_solved": False})
+        r = self._csrf_put_json(f'/api/questions/{qid}', {"is_solved": False})
         self.assertEqual(r.status_code, 200)
         self.assertFalse(r.get_json()["is_solved"])
 
     def test_not_found(self):
         """不存在的 ID 返回 404"""
-        self.assertEqual(self.client.put('/api/questions/999',
-                                         json={"title": "x"}).status_code, 404)
-        self.assertEqual(self.client.delete('/api/questions/999').status_code, 404)
+        self.assertEqual(self._csrf_put_json('/api/questions/999',
+                                             {"title": "x"}).status_code, 404)
+        self.assertEqual(self._csrf_delete('/api/questions/999').status_code, 404)
 
     def test_export_csv(self):
         """CSV 导出：200 + BOM"""
-        self._post_json('/api/questions', {"title": "导出"})
-        r = self.client.get('/api/export')
+        self._csrf_json('/api/questions', {"title": "导出"})
+        r = self._csrf_get('/api/export')
         self.assertEqual(r.status_code, 200)
         self.assertIn('text/csv', r.content_type)
         self.assertTrue(r.data.startswith(b'\xef\xbb\xbf'))
 
     def test_backup_restore_flow(self):
         """备份 → 清空 → 恢复 全链路"""
-        self._post_json('/api/questions', {"title": "备份前"})
-        r = self._post_json('/api/backup', None)
+        self._csrf_json('/api/questions', {"title": "备份前"})
+        r = self._csrf_json('/api/backup', {})
         self.assertEqual(r.status_code, 200)
         filename = r.get_json()["filename"]
 
-        for q in self.client.get('/api/questions').get_json():
-            self.client.delete(f"/api/questions/{q['id']}")
-        self.assertEqual(self.client.get('/api/questions').get_json(), [])
+        for q in self._csrf_get('/api/questions').get_json():
+            self._csrf_delete(f"/api/questions/{q['id']}")
+        self.assertEqual(self._csrf_get('/api/questions').get_json(), [])
 
-        r = self._post_json('/api/restore', {"filename": filename})
+        r = self._csrf_json('/api/restore', {"filename": filename})
         self.assertEqual(r.status_code, 200)
-        data = self.client.get('/api/questions').get_json()
+        data = self._csrf_get('/api/questions').get_json()
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["title"], "备份前")
 
     def test_restore_rejects_bad_names(self):
         """恢复接口拒绝非法文件名（路径穿越/前缀不符）"""
         for bad in ("../questions.json", "evil.json", "questions.json"):
-            r = self._post_json('/api/restore', {"filename": bad})
+            r = self._csrf_json('/api/restore', {"filename": bad})
             self.assertEqual(r.status_code, 400, f"应拒绝 {bad}")
 
     def test_backups_empty(self):
         """无备份时返回空列表"""
-        r = self.client.get('/api/backups')
+        r = self._csrf_get('/api/backups')
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json(), [])
+
+    # ---------- 新增：CSRF 安全测试 ----------
+
+    def test_csrf_required_for_post(self):
+        """POST 不携带 CSRF 头应被 403 拒绝"""
+        # 新客户端：带 cookie（有 session）但不带 CSRF 头
+        c2 = self.app.test_client()
+        c2.get('/api/csrf')  # 建立 session
+        r = c2.post('/api/questions', json={"title": "无CSRF测试"})
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("CSRF", r.get_json()["error"])
+
+    def test_csrf_required_for_put_delete(self):
+        """PUT/DELETE 同样要求 CSRF 头"""
+        r = self._csrf_json('/api/questions', {"title": "X"})
+        qid = r.get_json()["id"]
+        # 无 CSRF 头的请求
+        self.assertEqual(self.c.put(f'/api/questions/{qid}',
+                                    json={"title": "Y"}).status_code, 403)
+        self.assertEqual(self.c.delete(f'/api/questions/{qid}').status_code, 403)
+
+    def test_csrf_wrong_token_rejected(self):
+        """CSRF 头与会话不一致应被 403 拒绝"""
+        r = self.c.post('/api/questions', json={"title": "错token"},
+                        headers={"X-CSRF-Token": "not-the-right-token"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_login_endpoint_exempt_from_csrf(self):
+        """/api/login 是登录前调用的，不做 CSRF 校验（400/401 正常错误）"""
+        # 直接 POST 无 CSRF 头：不应是 403，应是密码错误 401（认证开启）或
+        # 400（认证关闭需要 JSON 对象 body 也通过；认证关闭 auth=False 直接 200）
+        r = self.c.post('/api/login', json={"password": "wrong"})
+        self.assertNotEqual(r.status_code, 403)
+
+    def test_csrf_token_issued(self):
+        """GET /api/csrf 返回有效 token（每次会话一致）"""
+        t1 = self._csrf_get('/api/csrf').get_json()["token"]
+        t2 = self._csrf_get('/api/csrf').get_json()["token"]
+        self.assertTrue(t1)
+        self.assertEqual(t1, t2)  # 同一会话 token 不变
+
+    # ---------- 新增：认证测试（用环境变量临时启用密码）----------
+
+    def test_auth_disabled_by_default(self):
+        """默认未设置 QUESTION_NOTEBOOK_PASSWORD → AUTH_ENABLED=False，
+        所有接口直接可访问（无需登录）"""
+        import web_app
+        self.assertFalse(web_app.AUTH_ENABLED)
+        self.assertEqual(self._csrf_get('/api/auth-status').get_json(),
+                         {"auth_enabled": False, "logged_in": True})
+
+    def test_auth_enabled_requires_login(self):
+        """启用认证后，受保护接口在未登录时返回 401，登录后恢复访问"""
+        import web_app
+        # 临时启用一个密码
+        old_enabled = web_app.AUTH_ENABLED
+        old_salt = web_app._AUTH_SALT
+        old_hash = web_app._AUTH_HASH
+        try:
+            import hashlib
+            web_app.AUTH_ENABLED = True
+            web_app._AUTH_SALT = b'\x00' * 16
+            web_app._AUTH_HASH = hashlib.pbkdf2_hmac(
+                "sha256", "hunter2".encode("utf-8"), web_app._AUTH_SALT, 100_000
+            )
+            c = self.app.test_client()
+            c.get('/api/csrf')  # 建立会话（拿到 CSRF 与 session）
+            with c.session_transaction() as sess:
+                csrf = sess["_csrf_token"]
+            # 未登录：被 401 拦截
+            r = c.get('/api/questions', headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 401)
+            # 密码错误
+            r = c.post('/api/login', json={"password": "wrong"})
+            self.assertEqual(r.status_code, 401)
+            # 密码正确
+            r = c.post('/api/login', json={"password": "hunter2"})
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(r.get_json()["ok"])
+            self.assertIn("token", r.get_json())
+            # 登录后刷新会话中的 token（登录成功返回了新 token）
+            new_csrf = r.get_json()["token"]
+            r = c.get('/api/questions', headers={"X-CSRF-Token": new_csrf})
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.get_json(), [])
+        finally:
+            web_app.AUTH_ENABLED = old_enabled
+            web_app._AUTH_SALT = old_salt
+            web_app._AUTH_HASH = old_hash
+
+    def test_logout_clears_session(self):
+        """登出后再访问受保护接口，认证启用时应重新被 401"""
+        import web_app
+        old_enabled = web_app.AUTH_ENABLED
+        old_salt = web_app._AUTH_SALT
+        old_hash = web_app._AUTH_HASH
+        try:
+            import hashlib
+            web_app.AUTH_ENABLED = True
+            web_app._AUTH_SALT = b'\x01' * 16
+            web_app._AUTH_HASH = hashlib.pbkdf2_hmac(
+                "sha256", "pass1".encode("utf-8"), web_app._AUTH_SALT, 100_000
+            )
+            c = self.app.test_client()
+            c.get('/api/csrf')
+            with c.session_transaction() as sess:
+                csrf_before = sess["_csrf_token"]
+            r = c.post('/api/login', json={"password": "pass1"})
+            self.assertEqual(r.status_code, 200)
+            csrf = r.get_json()["token"]
+            # 登出
+            r = c.post('/api/logout', headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200)
+            # 登出后旧 token 已无效（session 被清空）
+            r = c.get('/api/questions', headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 401)
+        finally:
+            web_app.AUTH_ENABLED = old_enabled
+            web_app._AUTH_SALT = old_salt
+            web_app._AUTH_HASH = old_hash
+
+    def test_login_empty_body_is_400(self):
+        """登录接口：非法 body（空/非对象）返回 400，且不应被 CSRF 挡住成 403。
+        仅在认证开启场景下校验（auth=False 时登录接口直接返回成功，不校验 body）。"""
+        import web_app, hashlib
+        old = (web_app.AUTH_ENABLED, web_app._AUTH_SALT, web_app._AUTH_HASH)
+        try:
+            web_app.AUTH_ENABLED = True
+            web_app._AUTH_SALT = b'\x02' * 16
+            web_app._AUTH_HASH = hashlib.pbkdf2_hmac(
+                "sha256", b"x", web_app._AUTH_SALT, 100_000
+            )
+            c = self.app.test_client()
+            # 非对象 body：不应是 CSRF 403，而应由 JSON 校验返回 400
+            r = c.post('/api/login', json=[1, 2, 3])
+            self.assertEqual(r.status_code, 400)
+            # 空 body：同样返回 400（而不是 CSRF 错误）
+            r = c.post('/api/login', data='', content_type='application/json')
+            self.assertEqual(r.status_code, 400)
+        finally:
+            web_app.AUTH_ENABLED, web_app._AUTH_SALT, web_app._AUTH_HASH = old
 
 
 if __name__ == "__main__":

@@ -14,6 +14,42 @@
     min-height: 100vh;
   }
 
+  /* ========== 登录页 ========== */
+  .login-wrap {
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .login-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 16px;
+    padding: 32px 28px;
+    width: 100%; max-width: 380px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  }
+  .login-card h1 {
+    font-size: 22px; color: #38bdf8; margin-bottom: 6px;
+  }
+  .login-card .sub {
+    font-size: 13px; color: #94a3b8; margin-bottom: 20px;
+  }
+  .login-card label {
+    display: block; font-size: 13px; color: #94a3b8;
+    margin: 12px 0 4px;
+  }
+  .login-card input[type="password"] {
+    width: 100%;
+    background: #0f172a; color: #e2e8f0;
+    border: 1px solid #334155; border-radius: 8px;
+    padding: 10px 12px; font-size: 15px; outline: none;
+  }
+  .login-card input[type="password"]:focus { border-color: #38bdf8; }
+  .login-card .actions {
+    margin-top: 20px; display: flex; justify-content: flex-end;
+  }
+  .hidden { display: none !important; }
+
   /* ========== 顶栏 ========== */
   .header {
     position: sticky; top: 0; z-index: 10;
@@ -25,6 +61,10 @@
   .header h1 {
     font-size: 20px; color: #38bdf8;
     margin-right: 8px; white-space: nowrap;
+  }
+  .header .spacer { flex: 1; }
+  .header .user-info {
+    font-size: 13px; color: #94a3b8;
   }
   .header input[type="text"], .header select {
     background: #0f172a; color: #e2e8f0;
@@ -163,6 +203,22 @@
 </head>
 <body>
 
+<!-- ===== 登录页 ===== -->
+<div class="login-wrap hidden" id="loginPage">
+  <div class="login-card">
+    <h1>🔐 问题笔记本</h1>
+    <div class="sub">请输入密码以继续使用</div>
+    <label>密码</label>
+    <input type="password" id="loginPwd" placeholder="在此输入密码" autofocus>
+    <div class="actions">
+      <button class="btn btn-primary" onclick="doLogin()">登录</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 主界面 ===== -->
+<div id="mainApp" class="hidden">
+
 <!-- ===== 顶栏 ===== -->
 <div class="header">
   <h1>📒 问题笔记本</h1>
@@ -175,6 +231,9 @@
   <select id="categoryFilter">
     <option value="all">全部分类</option>
   </select>
+  <span class="spacer"></span>
+  <div class="user-info" id="userInfo"></div>
+  <button class="btn" id="logoutBtn" onclick="doLogout()" style="display:none;">退出登录</button>
   <button class="btn btn-primary" onclick="openAddModal()">＋ 添加问题</button>
   <button class="btn" onclick="exportCsv()">📥 导出 CSV</button>
   <button class="btn" onclick="doBackup()">💾 备份</button>
@@ -243,9 +302,16 @@
   </div>
 </div>
 
+</div><!-- /mainApp -->
+
 <div class="toast" id="toast"></div>
 
 <script>
+// ========== 全局安全配置：由服务端模板注入 ==========
+const AUTH_ENABLED = {{ auth_enabled }};   // "true" or "false"（字符串）
+const INIT_LOGGED_IN = {{ logged_in }};   // "true" or "false"
+let __csrf_token = "{{ csrf_token }}";    // CSRF 令牌，登录成功后会被刷新
+
 // ========== 全局状态 ==========
 let questions = [];          // 全部问题（从后端拉取）
 let selectedBackup = null;   // 恢复弹窗里选中的备份文件
@@ -253,7 +319,6 @@ let editingId = null;        // 正在编辑的问题 ID（null = 新增）
 
 // ========== 工具函数 ==========
 function esc(s) {
-  // HTML 转义，防止特殊字符破坏页面结构
   return String(s ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
@@ -270,15 +335,111 @@ function toast(msg) {
 function openModal(id) { document.getElementById(id).classList.add('show'); }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
+// ========== fetch 封装：统一携带 CSRF 头，并处理 401 跳转登录 ==========
+async function api(url, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {});
+  headers['X-CSRF-Token'] = __csrf_token;
+  if (opts.body && !(opts.body instanceof FormData) &&
+      !opts.headers || !Object.keys(opts.headers).some(k => k.toLowerCase() === 'content-type')) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await fetch(url, Object.assign({}, opts, {
+    credentials: 'same-origin',
+    headers,
+  }));
+  if (res.status === 401) {
+    // 认证过期/未登录：强制展示登录页
+    showLoginPage();
+    throw new Error('未登录');
+  }
+  if (res.status === 403) {
+    try {
+      const err = await res.json();
+      toast('❌ ' + (err.error || 'CSRF 校验失败'));
+    } catch (_) {
+      toast('❌ 请求被拒绝');
+    }
+    throw new Error('CSRF 校验失败');
+  }
+  return res;
+}
+
+// ========== 登录 / 登出 ==========
+function showLoginPage() {
+  document.getElementById('mainApp').classList.add('hidden');
+  document.getElementById('loginPage').classList.remove('hidden');
+  document.getElementById('loginPwd').value = '';
+  setTimeout(() => document.getElementById('loginPwd').focus(), 50);
+}
+
+function showMainApp() {
+  document.getElementById('loginPage').classList.add('hidden');
+  document.getElementById('mainApp').classList.remove('hidden');
+  // 用户信息栏
+  const infoEl = document.getElementById('userInfo');
+  const logoutBtn = document.getElementById('logoutBtn');
+  if (AUTH_ENABLED) {
+    infoEl.textContent = '已登录';
+    logoutBtn.style.display = '';
+  } else {
+    infoEl.textContent = '';
+    logoutBtn.style.display = 'none';
+  }
+}
+
+async function doLogin() {
+  const pwd = document.getElementById('loginPwd').value;
+  if (!pwd) { toast('⚠️ 请输入密码'); return; }
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pwd })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast('❌ ' + (err.error || '登录失败'));
+      return;
+    }
+    const data = await res.json();
+    if (data.token) __csrf_token = data.token;  // 登录成功后刷新 token
+    toast('✅ 登录成功');
+    showMainApp();
+    load();
+  } catch (err) {
+    toast('❌ 网络错误');
+    console.error('doLogin 失败:', err);
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  // 登录页回车登录
+  const loginEl = document.getElementById('loginPwd');
+  if (!document.getElementById('loginPage').classList.contains('hidden')
+      && document.activeElement === loginEl && e.key === 'Enter') {
+    doLogin();
+  }
+});
+
+async function doLogout() {
+  try {
+    await api('/api/logout', { method: 'POST' });
+  } catch (_) {}
+  sessionStorage.clear();
+  showLoginPage();
+}
+
 // ========== 数据加载与渲染 ==========
 async function load() {
   try {
-    const res = await fetch('/api/questions');
+    const res = await api('/api/questions');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     questions = await res.json();
     renderFilters();
     render();
   } catch (err) {
+    if (err.message === '未登录') return;  // 已在 api() 里跳转
     toast('❌ 加载失败，请确认服务已启动');
     console.error('load() 失败:', err);
     document.getElementById('grid').innerHTML =
@@ -287,7 +448,6 @@ async function load() {
 }
 
 function renderFilters() {
-  // 分类下拉：从数据里动态生成（去重）
   const cats = [...new Set(questions.map(q => q.category))].sort();
   const sel = document.getElementById('categoryFilter');
   const current = sel.value;
@@ -307,7 +467,6 @@ function render() {
   const { kw, status, cat } = currentFilter();
   const keywords = kw ? kw.split(/\s+/) : [];
 
-  // 过滤：状态 + 分类 + 多关键词（全部命中才算）
   const filtered = questions.filter(q => {
     if (status === 'open' && q.is_solved) return false;
     if (status === 'solved' && !q.is_solved) return false;
@@ -319,14 +478,12 @@ function render() {
     return true;
   });
 
-  // 统计条
   const open = questions.filter(q => !q.is_solved).length;
   const solved = questions.length - open;
   document.getElementById('stats').innerHTML =
     `共 <b>${questions.length}</b> 条 · 未解决 <b style="color:#fbbf24">${open}</b> · 已解决 <b style="color:#4ade80">${solved}</b>` +
     (filtered.length !== questions.length ? ` · 当前显示 <b>${filtered.length}</b> 条` : '');
 
-  // 卡片
   const grid = document.getElementById('grid');
   if (!filtered.length) {
     grid.innerHTML = '<div class="empty">空空如也～ 点击右上角「添加问题」记下第一个问题吧</div>';
@@ -354,7 +511,6 @@ function render() {
   `).join('');
 }
 
-// 搜索框 / 筛选变化时重新渲染
 document.getElementById('searchInput').addEventListener('input', render);
 document.getElementById('statusFilter').addEventListener('change', render);
 document.getElementById('categoryFilter').addEventListener('change', render);
@@ -393,11 +549,7 @@ async function saveEdit() {
   const url = editingId === null ? '/api/questions' : `/api/questions/${editingId}`;
   const method = editingId === null ? 'POST' : 'PUT';
   try {
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+    const res = await api(url, { method, body: JSON.stringify(body) });
     if (res.ok) {
       closeModal('editModal');
       toast(editingId === null ? '✅ 问题已添加' : '✅ 问题已更新');
@@ -407,6 +559,7 @@ async function saveEdit() {
       toast('❌ ' + (err.error || '保存失败'));
     }
   } catch (err) {
+    if (err.message === '未登录') return;
     toast('❌ 网络错误，保存失败');
     console.error('saveEdit() 失败:', err);
   }
@@ -426,9 +579,8 @@ function openSolveModal(id) {
 async function saveSolve() {
   const solution = document.getElementById('solveSolution').value.trim();
   try {
-    const res = await fetch(`/api/questions/${solvingId}`, {
+    const res = await api(`/api/questions/${solvingId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_solved: true, solution })
     });
     if (res.ok) {
@@ -440,6 +592,7 @@ async function saveSolve() {
       toast('❌ ' + (err.error || '操作失败'));
     }
   } catch (err) {
+    if (err.message === '未登录') return;
     toast('❌ 网络错误，操作失败');
     console.error('saveSolve() 失败:', err);
   }
@@ -457,7 +610,7 @@ function openDeleteModal(id) {
 
 async function confirmDelete() {
   try {
-    const res = await fetch(`/api/questions/${deletingId}`, { method: 'DELETE' });
+    const res = await api(`/api/questions/${deletingId}`, { method: 'DELETE' });
     if (res.ok) {
       closeModal('deleteModal');
       toast('🗑️ 已删除');
@@ -467,6 +620,7 @@ async function confirmDelete() {
       toast('❌ ' + (err.error || '删除失败'));
     }
   } catch (err) {
+    if (err.message === '未登录') return;
     toast('❌ 网络错误，删除失败');
     console.error('confirmDelete() 失败:', err);
   }
@@ -474,12 +628,33 @@ async function confirmDelete() {
 
 // ========== 导出 / 备份 / 恢复 ==========
 function exportCsv() {
-  window.location.href = '/api/export';
+  // CSV 导出是浏览器直接下载（GET，通过 cookie 即可通过认证），
+  // 但浏览器会带上 CSRF 头；这里改用 fetch + blob 下载以便正确附加头。
+  api('/api/export', { method: 'GET' }).then(async res => {
+    if (!res.ok) {
+      toast('❌ 导出失败');
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const cd = res.headers.get('Content-Disposition') || '';
+    let name = 'questions.csv';
+    const m = cd.match(/filename="?([^";]+)"?/);
+    if (m) name = m[1];
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }).catch(err => {
+    if (err.message === '未登录') return;
+    toast('❌ 网络错误，导出失败');
+  });
 }
 
 async function doBackup() {
   try {
-    const res = await fetch('/api/backup', { method: 'POST' });
+    const res = await api('/api/backup', { method: 'POST', body: '{}' });
     const data = await res.json();
     if (res.ok) {
       toast(`💾 已备份：${data.filename}`);
@@ -487,6 +662,7 @@ async function doBackup() {
       toast('❌ ' + (data.error || '备份失败'));
     }
   } catch (err) {
+    if (err.message === '未登录') return;
     toast('❌ 网络错误，备份失败');
     console.error('doBackup() 失败:', err);
   }
@@ -495,7 +671,7 @@ async function doBackup() {
 async function openRestoreModal() {
   selectedBackup = null;
   try {
-    const res = await fetch('/api/backups');
+    const res = await api('/api/backups');
     const backups = await res.json();
     const list = document.getElementById('backupList');
     if (!backups.length) {
@@ -509,6 +685,7 @@ async function openRestoreModal() {
     }
     openModal('restoreModal');
   } catch (err) {
+    if (err.message === '未登录') return;
     toast('❌ 加载备份列表失败');
     console.error('openRestoreModal() 失败:', err);
   }
@@ -524,9 +701,8 @@ async function confirmRestore() {
   if (!selectedBackup) { toast('⚠️ 请先选择一个备份'); return; }
   if (!confirm(`确定从 ${selectedBackup} 恢复吗？当前数据会被覆盖！`)) return;
   try {
-    const res = await fetch('/api/restore', {
+    const res = await api('/api/restore', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename: selectedBackup })
     });
     if (res.ok) {
@@ -538,13 +714,22 @@ async function confirmRestore() {
       toast('❌ ' + (err.error || '恢复失败'));
     }
   } catch (err) {
+    if (err.message === '未登录') return;
     toast('❌ 网络错误，恢复失败');
     console.error('confirmRestore() 失败:', err);
   }
 }
 
 // ========== 启动 ==========
-load();
+(function bootstrap() {
+  // 根据模板注入的认证状态决定首屏
+  if (AUTH_ENABLED && !INIT_LOGGED_IN) {
+    showLoginPage();
+  } else {
+    showMainApp();
+    load();
+  }
+})();
 </script>
 </body>
 </html>
