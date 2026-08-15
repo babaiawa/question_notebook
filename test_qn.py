@@ -22,6 +22,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import models
 import question_notebook as cli
 
+# 检测 Flask 是否可用：未安装时跳过 Web 接口测试，数据层/CLI 测试照常运行
+try:
+    import flask  # noqa: F401
+    HAS_FLASK = True
+except ImportError:
+    HAS_FLASK = False
+
 
 class TestModels(unittest.TestCase):
     """数据层测试"""
@@ -230,6 +237,7 @@ class TestCLI(unittest.TestCase):
             cli.search_questions(questions)  # 无结果，不崩溃
 
 
+@unittest.skipUnless(HAS_FLASK, "未安装 Flask，跳过 Web 接口测试")
 class TestWeb(unittest.TestCase):
     """Web 接口层测试（Flask test_client，无需启动真实服务）"""
 

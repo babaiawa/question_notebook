@@ -17,6 +17,7 @@ from models import (
     backup_data,
     list_backups,
     restore_data,
+    data_lock,
     DEFAULT_CATEGORY,
 )
 
@@ -40,7 +41,11 @@ def print_questions(questions, header, empty_msg="当前空空如也，快去添
 
 
 def add_question(questions):
-    """交互式添加新问题并保存。"""
+    """交互式添加新问题并保存。
+
+    写操作在跨进程锁内执行：重新加载最新数据 → 追加 → 保存 → 同步内存快照，
+    与 Web 端并发写安全（不会覆盖对方刚写入的数据）。
+    """
     print("\n--- 添加新问题 ---")
 
     title = input("请输入问题标题: ")
@@ -55,9 +60,14 @@ def add_question(questions):
     if not category:
         category = DEFAULT_CATEGORY
 
-    new_q = Question(title=title, description=description, category=category)
-    questions.append(new_q)
-    save_questions(questions)
+    # 用户输入在锁外完成，锁内只做数据操作（避免持锁等待输入）
+    with data_lock():
+        latest = load_questions()
+        new_q = Question(title=title, description=description, category=category)
+        latest.append(new_q)
+        save_questions(latest)
+        questions.clear()
+        questions.extend(latest)
     print(f"问题 '{title}' 已成功添加并保存！")
 
 
@@ -67,7 +77,10 @@ def list_questions(questions):
 
 
 def solve_question(questions):
-    """将指定 ID 的问题标记为已解决，并记录解决方案。"""
+    """将指定 ID 的问题标记为已解决，并记录解决方案。
+
+    锁内基于最新数据操作，与 Web 端并发写安全。
+    """
     print("\n--- [!] 标记问题为已解决 ---")
     try:
         q_id = int(input("请输入要解决的问题ID: "))
@@ -75,31 +88,33 @@ def solve_question(questions):
         print("[错误] ID必须是数字！")
         return
 
-    # 按 ID 查找目标问题
-    target_q = None
-    for q in questions:
-        if q.id == q_id:
-            target_q = q
-            break
-
-    if target_q is None:
-        print(f"[错误] 未找到ID为 {q_id} 的问题。")
-        return
-
-    if target_q.is_solved:
-        print(f"[提示] 问题 '{target_q.title}' 已经是已解决状态了。")
-        return
-
     solution = input("请输入解决方案/心得: ")
-    target_q.is_solved = True
-    target_q.solution = solution
 
-    save_questions(questions)
+    with data_lock():
+        latest = load_questions()
+        target_q = next((q for q in latest if q.id == q_id), None)
+
+        if target_q is None:
+            print(f"[错误] 未找到ID为 {q_id} 的问题。")
+            return
+
+        if target_q.is_solved:
+            print(f"[提示] 问题 '{target_q.title}' 已经是已解决状态了。")
+            return
+
+        target_q.is_solved = True
+        target_q.solution = solution
+        save_questions(latest)
+        questions.clear()
+        questions.extend(latest)
     print(f"[成功] 问题 '{target_q.title}' 已标记为已解决！")
 
 
 def delete_question(questions):
-    """按 ID 删除问题（需二次确认）。"""
+    """按 ID 删除问题（需二次确认）。
+
+    两次锁内操作均基于最新数据，确认期间若数据被 Web 端改动也能正确处理。
+    """
     print("\n--- [x] 删除问题 ---")
     try:
         q_id = int(input("请输入要删除的问题ID: "))
@@ -107,12 +122,10 @@ def delete_question(questions):
         print("[错误] ID必须是数字！")
         return
 
-    # 确认目标问题存在
-    target_q = None
-    for q in questions:
-        if q.id == q_id:
-            target_q = q
-            break
+    # 第一次锁内查询：基于最新数据找到目标，拿到标题用于确认提示
+    with data_lock():
+        latest = load_questions()
+        target_q = next((q for q in latest if q.id == q_id), None)
 
     if target_q is None:
         print(f"[错误] 未找到ID为 {q_id} 的问题，删除失败。")
@@ -124,13 +137,20 @@ def delete_question(questions):
         print("[提示] 已取消删除。")
         return
 
-    # 列表推导式过滤目标 ID（比直接 remove 更安全）
-    original_len = len(questions)
-    questions[:] = [q for q in questions if q.id != q_id]
+    # 第二次锁内操作：重新加载（确认期间可能被 Web 端修改），执行删除
+    with data_lock():
+        latest = load_questions()
+        original_len = len(latest)
+        latest[:] = [q for q in latest if q.id != q_id]
 
-    if len(questions) < original_len:
-        save_questions(questions)
-        print(f"[成功] ID为 {q_id} 的问题已被永久删除。")
+        if len(latest) == original_len:
+            print(f"[错误] 未找到ID为 {q_id} 的问题，删除失败。")
+            return
+
+        save_questions(latest)
+        questions.clear()
+        questions.extend(latest)
+    print(f"[成功] ID为 {q_id} 的问题已被永久删除。")
 
 
 def search_questions(questions):
@@ -172,7 +192,10 @@ def search_questions(questions):
 
 
 def edit_question(questions):
-    """按 ID 编辑问题（可修改标题/描述/分类/解决方案，回车表示该项保持不变）。"""
+    """按 ID 编辑问题（可修改标题/描述/分类/解决方案，回车表示该项保持不变）。
+
+    输入阶段在锁外完成（不持锁等待用户），修改在锁内基于最新数据应用。
+    """
     print("\n--- [e] 编辑问题 ---")
     try:
         q_id = int(input("请输入要编辑的问题ID: "))
@@ -180,12 +203,10 @@ def edit_question(questions):
         print("[错误] ID必须是数字！")
         return
 
-    # 按 ID 查找目标问题
-    target_q = None
-    for q in questions:
-        if q.id == q_id:
-            target_q = q
-            break
+    # 锁内查询当前值（基于最新数据）
+    with data_lock():
+        latest = load_questions()
+        target_q = next((q for q in latest if q.id == q_id), None)
 
     if target_q is None:
         print(f"[错误] 未找到ID为 {q_id} 的问题。")
@@ -195,26 +216,40 @@ def edit_question(questions):
 
     print(f"当前标题: {target_q.title}")
     new_title = input("请输入新标题 (直接回车保持不变): ").strip()
-    if new_title:
-        target_q.title = new_title
 
     print(f"当前描述: {target_q.description or '(空)'}")
     new_desc = input("请输入新描述 (直接回车保持不变): ").strip()
-    if new_desc:
-        target_q.description = new_desc
 
     print(f"当前分类: {target_q.category}")
     new_category = input("请输入新分类 (直接回车保持不变): ").strip()
-    if new_category:
-        target_q.category = new_category
 
     if target_q.is_solved:
         print(f"当前解决方案: {target_q.solution or '(空)'}")
         new_solution = input("请输入新解决方案 (直接回车保持不变): ").strip()
-        if new_solution:
+    else:
+        new_solution = None
+
+    # 锁内应用修改并保存（输入期间数据可能被 Web 端改动，基于最新数据重查）
+    with data_lock():
+        latest = load_questions()
+        target_q = next((q for q in latest if q.id == q_id), None)
+
+        if target_q is None:
+            print(f"[错误] 未找到ID为 {q_id} 的问题，修改未保存。")
+            return
+
+        if new_title:
+            target_q.title = new_title
+        if new_desc:
+            target_q.description = new_desc
+        if new_category:
+            target_q.category = new_category
+        if new_solution is not None and new_solution:
             target_q.solution = new_solution
 
-    save_questions(questions)
+        save_questions(latest)
+        questions.clear()
+        questions.extend(latest)
     print(f"[成功] 问题 '{old_title}' 已更新为 '{target_q.title}'！")
 
 
@@ -280,12 +315,13 @@ def restore_questions(questions):
         print("[提示] 已取消恢复。")
         return
 
-    # 数据层执行恢复（含文件名白名单校验），成功后在内存中重新加载
-    if not restore_data(backup_name):
-        print("[错误] 恢复失败，备份文件无效。")
-        return
-    questions.clear()
-    questions.extend(load_questions())
+    # 数据层执行恢复（含文件名白名单校验），锁内与 Web 写串行
+    with data_lock():
+        if not restore_data(backup_name):
+            print("[错误] 恢复失败，备份文件无效。")
+            return
+        questions.clear()
+        questions.extend(load_questions())
     print(f"[成功] 数据已恢复！共 {len(questions)} 条问题。")
 
 
