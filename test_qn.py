@@ -220,8 +220,10 @@ class TestCLI(unittest.TestCase):
 
     def test_view_by_category(self):
         """分类浏览：正常选择与无效编号均不崩溃"""
+        # 数据必须落盘：view_by_category 开头会 _refresh 从磁盘重载
         questions = [models.Question(title="A", category="编程"),
                      models.Question(title="B")]
+        models.save_questions(questions)
         with patch('builtins.input', side_effect=["1"]):
             cli.view_by_category(questions)
         with patch('builtins.input', side_effect=["99"]):
@@ -229,12 +231,29 @@ class TestCLI(unittest.TestCase):
 
     def test_multi_keyword_search(self):
         """多关键词 AND 搜索"""
+        # 数据必须落盘：search_questions 开头会 _refresh 从磁盘重载
         questions = [models.Question(title="Python报错", description="编码问题", category="编程"),
                      models.Question(title="电脑卡顿", category="硬件")]
+        models.save_questions(questions)
         with patch('builtins.input', side_effect=["Python 编码"]):
             cli.search_questions(questions)  # 应命中第一条
         with patch('builtins.input', side_effect=["Python 硬件"]):
             cli.search_questions(questions)  # 无结果，不崩溃
+
+    def test_refresh_syncs_from_disk(self):
+        """_refresh 从磁盘重载：外部写入的数据能同步进内存快照"""
+        questions = [models.Question(title="内存数据")]
+        models.save_questions(questions)
+
+        # 模拟 Web 端在磁盘上追加了一条（内存快照里没有）
+        disk = models.load_questions()
+        disk.append(models.Question(title="磁盘新数据"))
+        models.save_questions(disk)
+
+        cli._refresh(questions)  # 读操作前的刷新
+        titles = [q.title for q in questions]
+        self.assertIn("磁盘新数据", titles)
+        self.assertEqual(len(questions), 2)
 
 
 @unittest.skipUnless(HAS_FLASK, "未安装 Flask，跳过 Web 接口测试")

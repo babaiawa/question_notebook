@@ -358,8 +358,12 @@ def backup_menu(questions):
 
 
 def export_csv(questions):
-    """导出问题列表为 CSV 文件（UTF-8 BOM，Excel 直接打开不乱码）。"""
+    """导出问题列表为 CSV 文件（UTF-8 BOM，Excel 直接打开不乱码）。
+
+    导出前刷新内存快照，保证导出的始终是最新数据。
+    """
     print("\n--- [c] 导出 CSV ---")
+    _refresh(questions)
 
     if not questions:
         print("[提示] 当前没有数据可导出。")
