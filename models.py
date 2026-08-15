@@ -95,11 +95,32 @@ def load_questions():
         return []
 
 
+def _atomic_write(content):
+    """原子写入 DATA_FILE：先写同目录临时文件再 os.replace 替换。
+
+    写入中途进程崩溃/断电不会留下半个 JSON；任何异常都会清理临时文件。
+    内容末尾补换行，避免 git diff 出现 "No newline at end of file" 噪音。
+    """
+    if not content.endswith('\n'):
+        content += '\n'
+    # 临时文件与目标文件同目录，保证 os.replace 是原子操作（同文件系统）
+    fd, tmp_path = tempfile.mkstemp(dir=BASE_DIR, suffix=".tmp")
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(content)
+        os.replace(tmp_path, DATA_FILE)
+    except BaseException:
+        # 任何异常都清理临时文件，避免残留
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
 def save_questions(questions):
     """将问题列表写入 JSON 文件（新问题自动分配 ID）。
 
-    采用原子写入：先写临时文件再 os.replace 替换，避免写入中途
-    进程崩溃/断电导致数据文件变成半个 JSON。
+    采用原子写入（见 _atomic_write），避免写入中途进程崩溃/断电
+    导致数据文件变成半个 JSON。
     """
     max_id = 0
     for q in questions:
@@ -113,17 +134,7 @@ def save_questions(questions):
             q.id = max_id
         items.append(q.to_dict())
 
-    # 临时文件与目标文件同目录，保证 os.replace 是原子操作（同文件系统）
-    fd, tmp_path = tempfile.mkstemp(dir=BASE_DIR, suffix=".tmp")
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(items, f, indent=4, ensure_ascii=False)
-        os.replace(tmp_path, DATA_FILE)
-    except BaseException:
-        # 任何异常都清理临时文件，避免残留
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
+    _atomic_write(json.dumps(items, indent=4, ensure_ascii=False))
 
 
 # ---------- 备份与恢复 ----------
@@ -157,6 +168,7 @@ def restore_data(filename):
     """从备份文件恢复数据，返回 True/False。
 
     仅接受符合命名规范（questions_*.json）的纯文件名，拒绝路径穿越。
+    恢复同样走原子写入，避免恢复中途崩溃损坏数据文件。
     """
     # 白名单校验：必须是纯文件名且匹配备份命名规范
     if not filename or not BACKUP_NAME_PATTERN.match(filename):
@@ -164,7 +176,9 @@ def restore_data(filename):
     backup_path = os.path.join(BACKUP_DIR, filename)
     if not os.path.exists(backup_path):
         return False
-    shutil.copy2(backup_path, DATA_FILE)
+    with open(backup_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    _atomic_write(content)
     return True
 
 

@@ -6,6 +6,7 @@ web_app.py - Web 界面层
 运行：python web_app.py  →  浏览器打开 http://127.0.0.1:5000
 """
 import datetime
+import io
 import threading
 
 from flask import Flask, request, jsonify, render_template, send_file
@@ -32,8 +33,12 @@ _write_lock = threading.Lock()
 
 
 def _get_json_body():
-    """安全解析请求体：空 body / 非 JSON 时返回 None，由调用方返回友好错误。"""
-    return request.get_json(force=True, silent=True)
+    """安全解析请求体：空 body / 非 JSON / 非对象时返回 None，由调用方返回友好错误。"""
+    data = request.get_json(force=True, silent=True)
+    # 只接受 JSON 对象（dict）；数组/字符串等非对象会让后续 .get() 崩溃
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 # ---------- 页面 ----------
@@ -125,7 +130,7 @@ def api_export():
     content = build_csv(questions)
     filename = f'questions_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
     return send_file(
-        __import__('io').BytesIO(content.encode('utf-8')),
+        io.BytesIO(content.encode('utf-8')),
         mimetype='text/csv',
         as_attachment=True,
         download_name=filename

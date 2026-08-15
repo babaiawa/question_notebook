@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 test_qn.py - Question Notebook 自动化测试
 
@@ -104,6 +104,14 @@ class TestModels(unittest.TestCase):
         self.assertEqual(leftovers, [])
         loaded = models.load_questions()
         self.assertEqual(len(loaded), 1)
+
+    def test_trailing_newline(self):
+        """数据文件末尾有换行（避免 git diff 噪音）"""
+        questions = [models.Question(title="换行测试")]
+        models.save_questions(questions)
+        with open(models.DATA_FILE, 'r', encoding='utf-8') as f:
+            content = f.read()
+        self.assertTrue(content.endswith('\n'))
 
     def test_backup_name_unique_and_filtered(self):
         """备份文件名含微秒；list_backups 只认符合规范的文件"""
