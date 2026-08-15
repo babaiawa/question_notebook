@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 test_qn.py - Question Notebook 自动化测试
 
@@ -34,6 +34,7 @@ class TestModels(unittest.TestCase):
         tmp_data = os.path.join(self.tmpdir, "questions.json")
         tmp_backup = os.path.join(self.tmpdir, "backups")
         tmp_export = os.path.join(self.tmpdir, "exports")
+        models.BASE_DIR = cli.BASE_DIR = self.tmpdir
         models.DATA_FILE = cli.DATA_FILE = tmp_data
         models.BACKUP_DIR = cli.BACKUP_DIR = tmp_backup
         models.EXPORT_DIR = cli.EXPORT_DIR = tmp_export
@@ -82,6 +83,64 @@ class TestModels(unittest.TestCase):
         self.assertEqual(loaded, [])
         self.assertTrue(os.path.exists(models.DATA_FILE + ".bak"))
 
+    def test_wrong_top_level_type(self):
+        """合法 JSON 但顶层不是数组（对象/字符串）：按损坏处理，不崩溃"""
+        for bad in ('{"a": 1}', '"just a string"', "123"):
+            # 每个用例前清掉上次的 .bak
+            if os.path.exists(models.DATA_FILE + ".bak"):
+                os.remove(models.DATA_FILE + ".bak")
+            with open(models.DATA_FILE, 'w', encoding='utf-8') as f:
+                f.write(bad)
+            loaded = models.load_questions()
+            self.assertEqual(loaded, [], f"顶层为 {bad[:20]} 时应返回空列表")
+            self.assertTrue(os.path.exists(models.DATA_FILE + ".bak"))
+
+    def test_atomic_save(self):
+        """原子写入：保存后无 .tmp 残留，数据完整"""
+        questions = [models.Question(title="原子测试")]
+        models.save_questions(questions)
+        # 不应残留临时文件
+        leftovers = [f for f in os.listdir(models.BASE_DIR) if f.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
+        loaded = models.load_questions()
+        self.assertEqual(len(loaded), 1)
+
+    def test_backup_name_unique_and_filtered(self):
+        """备份文件名含微秒；list_backups 只认符合规范的文件"""
+        questions = [models.Question(title="备份测试")]
+        models.save_questions(questions)
+        name1 = models.backup_data()
+        name2 = models.backup_data()  # 同秒连续备份也不覆盖
+        self.assertNotEqual(name1, name2)
+        # 放一个不合规文件，不应被列出
+        with open(os.path.join(models.BACKUP_DIR, "evil.json"), 'w', encoding='utf-8') as f:
+            f.write("{}")
+        backups = models.list_backups()
+        self.assertEqual(len(backups), 2)
+        self.assertTrue(all(models.BACKUP_NAME_PATTERN.match(n) for n in backups))
+
+    def test_restore_rejects_bad_names(self):
+        """restore_data 拒绝非法文件名（路径穿越/前缀不符）"""
+        questions = [models.Question(title="恢复测试")]
+        models.save_questions(questions)
+        models.backup_data()
+        for bad in ("../questions.json", "evil.json", "questions.json",
+                    "questions_20260101_000000.json/../../x", ""):
+            self.assertFalse(models.restore_data(bad), f"应拒绝: {bad}")
+        # 合法文件名应成功
+        good = models.list_backups()[0]
+        self.assertTrue(models.restore_data(good))
+
+    def test_build_csv(self):
+        """CSV 生成：含 BOM 头、表头、数据行"""
+        questions = [models.Question(title="CSV测试", category="测试", description="描述")]
+        models.save_questions(questions)
+        content = models.build_csv(questions)
+        self.assertTrue(content.startswith('\ufeff'))
+        lines = content.strip().split('\n')
+        self.assertEqual(lines[0].rstrip('\r'), '\ufeff' + "ID,标题,描述,创建时间,是否已解决,解决方案,分类")
+        self.assertIn("CSV测试", lines[1])
+
 
 class TestCLI(unittest.TestCase):
     """CLI 界面层测试"""
@@ -91,6 +150,7 @@ class TestCLI(unittest.TestCase):
         tmp_data = os.path.join(self.tmpdir, "questions.json")
         tmp_backup = os.path.join(self.tmpdir, "backups")
         tmp_export = os.path.join(self.tmpdir, "exports")
+        models.BASE_DIR = cli.BASE_DIR = self.tmpdir
         models.DATA_FILE = cli.DATA_FILE = tmp_data
         models.BACKUP_DIR = cli.BACKUP_DIR = tmp_backup
         models.EXPORT_DIR = cli.EXPORT_DIR = tmp_export
@@ -171,3 +231,4 @@ class TestCLI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

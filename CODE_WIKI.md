@@ -133,12 +133,16 @@ web_app.py ───────────────────────
 | `Question` | 类 | CLI、Web、测试 |
 | `load_questions` | 函数 | CLI、Web、测试 |
 | `save_questions` | 函数 | CLI、Web、测试 |
+| `backup_data` | 函数 | CLI、Web、测试 |
+| `list_backups` | 函数 | CLI、Web、测试 |
+| `restore_data` | 函数 | CLI、Web、测试 |
+| `build_csv` | 函数 | CLI、Web、测试 |
 | `DATA_FILE` | 常量 | CLI、Web、测试 |
-| `BACKUP_DIR` | 常量 | CLI、Web、测试 |
+| `BACKUP_DIR` | 常量 | CLI、测试 |
 | `EXPORT_DIR` | 常量 | CLI、测试 |
 | `DEFAULT_CATEGORY` | 常量 | CLI、Web、测试 |
 
-> ⚠️ **值拷贝陷阱**：CLI/Web 用 `from models import DATA_FILE` 拿到的是字符串值拷贝，而非引用。测试重定向数据路径时，必须**同时**更新 `models.DATA_FILE` 与 `cli.DATA_FILE`（见 `test_qn.py` 的 `setUp`）。
+> ⚠️ **值拷贝陷阱**：CLI/Web 用 `from models import DATA_FILE` 拿到的是字符串值拷贝，而非引用。测试重定向数据路径时，必须**同时**更新 `models.DATA_FILE` 与 `cli.DATA_FILE`（含 `BASE_DIR`，见 `test_qn.py` 的 `setUp`）。
 
 ---
 
@@ -155,6 +159,7 @@ web_app.py ───────────────────────
 | `BACKUP_DIR` | `BASE_DIR/backups` | 备份目录路径 |
 | `EXPORT_DIR` | `BASE_DIR/exports` | CSV 导出目录路径 |
 | `DEFAULT_CATEGORY` | `"未分类"` | 默认分类 |
+| `BACKUP_NAME_PATTERN` | `^questions_\d{8}_\d{6}(_\d{6})?\.json$` | 备份文件名白名单（恢复接口校验用） |
 
 > 路径基于脚本文件目录定位，因此**从任意工作目录运行都能正确找到数据文件**。
 
@@ -197,6 +202,7 @@ def load_questions():
 
 1. 文件不存在 → 返回空列表 `[]`。
 2. JSON 解析失败（`json.JSONDecodeError`）→ 将损坏文件重命名为 `questions.json.bak`，返回空列表，**不崩溃**。
+3. JSON 合法但**顶层不是数组**（对象/字符串/数字）→ 同样视为损坏，备份 `.bak` 后返回空列表。
 
 #### 函数 `save_questions(questions)`
 
@@ -206,9 +212,18 @@ def save_questions(questions):
 
 将问题列表写入 `DATA_FILE`。行为：
 
-- 先扫描已有最大 `id`。
-- 对 `id is None` 的新对象，自增分配 ID。
+- 先扫描已有最大 `id`，对 `id is None` 的新对象自增分配 ID。
 - 以 `indent=4`、`ensure_ascii=False` 写入（格式化、保留中文）。
+- **原子写入**：先写同目录临时文件（`tempfile.mkstemp`），再 `os.replace` 原子替换目标文件。写入中途进程崩溃/断电不会留下半个 JSON；任何异常都会清理临时文件。
+
+#### 数据操作函数（备份/恢复/导出，CLI 与 Web 共用）
+
+| 函数 | 说明 |
+|------|------|
+| `backup_data()` | 复制 `DATA_FILE` 到 `BACKUP_DIR`，文件名 `questions_YYYYMMDD_HHMMSS_微秒.json`（微秒避免同秒覆盖），返回文件名；无数据文件返回 `None` |
+| `list_backups()` | 列出全部备份文件名（新的在前），仅认符合 `BACKUP_NAME_PATTERN` 的文件 |
+| `restore_data(filename)` | 从备份恢复：正则白名单校验文件名（拒绝路径穿越与不合规命名），成功返回 `True` |
+| `build_csv(questions)` | 生成 CSV 内容字符串（含 `\ufeff` BOM 头），由调用方负责写文件/下载 |
 
 ---
 
@@ -254,11 +269,11 @@ questions[:] = [q for q in questions if q.id != q_id]
 
 #### `backup_questions()`
 
-将 `DATA_FILE` 复制到 `BACKUP_DIR`，文件名带时间戳 `questions_YYYYMMDD_HHMMSS.json`。
+委托数据层 `backup_data()` 创建带时间戳（含微秒）的备份，打印备份路径。
 
 #### `restore_questions(questions)`
 
-列出备份文件，选择编号后二次确认，`copy2` 覆盖数据文件并 `clear() + extend(load_questions())` 重新加载到内存。
+列出备份文件（数据层 `list_backups()`），选择编号后二次确认，数据层 `restore_data()` 执行恢复（含白名单校验），成功后 `clear() + extend(load_questions())` 重新加载到内存。
 
 #### `backup_menu(questions)`
 
@@ -266,7 +281,7 @@ questions[:] = [q for q in questions if q.id != q_id]
 
 #### `export_csv(questions)`
 
-导出问题列表为 CSV 到 `EXPORT_DIR`，`utf-8-sig` 写入 BOM 头，Excel 打开不乱码。
+将问题列表导出为 CSV 到 `EXPORT_DIR`。内容由数据层 `build_csv()` 生成（含 BOM 头），界面层只负责写文件，Excel 打开不乱码。
 
 #### `view_by_category(questions)`
 
@@ -285,7 +300,13 @@ questions[:] = [q for q in questions if q.id != q_id]
 ```python
 app = Flask(__name__)
 app.json.ensure_ascii = False  # 中文原样输出，不做 \uXXXX 转义
+
+_write_lock = threading.Lock()  # 写操作锁，见下方说明
 ```
+
+**写操作锁**：Flask 开发服务器默认多线程，而数据操作是"读-改-写"三段式（`load_questions() → 修改 → save_questions()`）。若无锁，两个并发写请求会各自读到旧列表并互相覆盖（丢数据）。因此 `api_add` / `api_update` / `api_delete` / `api_backup` / `api_restore` 均以 `with _write_lock:` 串行化整段操作。
+
+**`_get_json_body()`**：封装 `request.get_json(force=True, silent=True)`，请求体为空或非 JSON 时返回 `None`，由调用方返回 `400 {"error": "请求体必须是 JSON"}`，避免框架抛出 500。
 
 #### 路由与处理函数
 
@@ -293,13 +314,13 @@ app.json.ensure_ascii = False  # 中文原样输出，不做 \uXXXX 转义
 |---------|-----------|------|
 | `index()` | `GET /` | 渲染 `templates/index.html` |
 | `api_list()` | `GET /api/questions` | 返回全部问题 |
-| `api_add()` | `POST /api/questions` | 添加问题，`title` 空返回 400 |
+| `api_add()` | `POST /api/questions` | 添加问题；`title` 空或请求体非 JSON 返回 400 |
 | `api_update(qid)` | `PUT /api/questions/<int:qid>` | 部分更新（含标记解决），不存在返回 404 |
 | `api_delete(qid)` | `DELETE /api/questions/<int:qid>` | 删除问题，不存在返回 404 |
-| `api_export()` | `GET /api/export` | 导出 CSV 附件下载（加 BOM） |
-| `api_backup()` | `POST /api/backup` | 创建带时间戳备份快照 |
-| `api_backups()` | `GET /api/backups` | 列出备份文件（新的在前） |
-| `api_restore()` | `POST /api/restore` | 从备份恢复，校验文件名防路径穿越 |
+| `api_export()` | `GET /api/export` | 导出 CSV 附件下载（`build_csv` 生成，含 BOM） |
+| `api_backup()` | `POST /api/backup` | 创建带时间戳备份快照（数据层 `backup_data`） |
+| `api_backups()` | `GET /api/backups` | 列出备份文件（数据层 `list_backups`） |
+| `api_restore()` | `POST /api/restore` | 从备份恢复（数据层 `restore_data`，文件名白名单校验） |
 
 #### 入口
 
@@ -356,6 +377,11 @@ if __name__ == "__main__":
 | `test_save_load_roundtrip` | 保存后加载一致 + ID 自动分配 |
 | `test_old_data_compat` | 缺失 `category` 字段自动补默认值 |
 | `test_corrupt_json` | 损坏 JSON 备份 `.bak` 后返回空列表 |
+| `test_wrong_top_level_type` | 合法 JSON 但顶层非数组（对象/字符串/数字）按损坏处理 |
+| `test_atomic_save` | 原子写入无 `.tmp` 残留，数据完整 |
+| `test_backup_name_unique_and_filtered` | 备份文件名含微秒不覆盖；`list_backups` 过滤不合规文件 |
+| `test_restore_rejects_bad_names` | `restore_data` 拒绝路径穿越/前缀不符文件名 |
+| `test_build_csv` | CSV 生成含 BOM 头、表头、数据行 |
 
 #### `TestCLI(unittest.TestCase)` — CLI 层测试
 
@@ -378,10 +404,12 @@ if __name__ == "__main__":
       │  body: {title, description, category}
       ▼
 后端 api_add()   (web_app.py)
+      │  _get_json_body() 解析（空 body → 400）
       │  校验 title 非空 → 构造 Question
+      │  with _write_lock:  (并发写串行化)
       ▼
 数据层 save_questions() (models.py)
-      │  分配 ID → json.dump 写入 questions.json
+      │  分配 ID → 写临时文件 → os.replace 原子替换
       ▼
 返回 201 + q.to_dict() → 前端 load() 重新渲染
 ```
@@ -393,15 +421,17 @@ load_questions()
       │  文件不存在？
       ├─ 是 → 返回 []
       │  文件存在 → json.load 解析
-      │        ├─ 成功 → 反序列化返回
-      │        └─ JSONDecodeError → 重命名为 questions.json.bak → 返回 []
+      │        ├─ 成功且顶层是数组 → 反序列化返回
+      │        ├─ JSONDecodeError → 重命名 .bak → 返回 []
+      │        └─ 顶层不是数组 → 重命名 .bak → 返回 []
 ```
 
 ### 6.3 备份与恢复流程
 
 ```
-备份：copy2(DATA_FILE → backups/questions_时间戳.json)
-恢复：选择备份 → 二次确认 → copy2(备份 → DATA_FILE) → 重新 load_questions()
+备份：backup_data() → copy2(DATA_FILE → backups/questions_时间戳_微秒.json)
+恢复：list_backups() 列出 → 选择备份 → 二次确认
+     → restore_data() 白名单校验文件名 → copy2(备份 → DATA_FILE) → 重新 load_questions()
 ```
 
 ---
@@ -458,9 +488,10 @@ load_questions()
 
 **约定与错误处理：**
 
+- 请求体为空或非 JSON → `400 {"error": "请求体必须是 JSON"}`（所有带 body 的接口）
 - 添加问题 `title` 为空 → `400 {"error": "标题不能为空"}`
 - 编辑/删除不存在的 ID → `404 {"error": "未找到该问题"}`
-- 恢复接口校验文件名不含 `/`、`\`，拒绝路径穿越 → `400`；文件不存在 → `404`
+- 恢复接口文件名须匹配白名单 `questions_YYYYMMDD_HHMMSS[_微秒].json`（拒绝路径穿越与不合规命名）→ `400`；文件不存在 → `404`
 - 编辑接口只更新请求体中出现的字段（部分更新语义）
 
 ---
@@ -476,14 +507,16 @@ load_questions()
 
 标准库（无需额外安装）：
 
-| 模块 | 用途 |
-|------|------|
-| `json` | JSON 序列化/反序列化 |
-| `os` | 路径与文件系统操作 |
-| `csv` | CSV 导出 |
-| `io` | 内存字节流（Web 导出） |
-| `datetime` | 时间戳生成 |
-| `shutil` | 文件复制（备份/恢复） |
+| 模块 | 用途 | 所属模块 |
+|------|------|---------|
+| `json` | JSON 序列化/反序列化 | `models.py` |
+| `os` | 路径与文件系统操作 | 全部 |
+| `re` | 备份文件名白名单正则 | `models.py` |
+| `csv` / `io` | CSV 生成（`build_csv` 内部） | `models.py` |
+| `datetime` | 时间戳生成 | `models.py`、`web_app.py` |
+| `shutil` | 文件复制（备份/恢复） | `models.py` |
+| `tempfile` | 原子写入临时文件 | `models.py` |
+| `threading` | 写操作锁 | `web_app.py` |
 
 ### 9.2 测试依赖
 
@@ -540,9 +573,9 @@ python test_qn.py
 ## 11. 测试说明
 
 - **入口**：`python test_qn.py`（`unittest` 默认发现并运行全部用例，`verbosity=2`）。
-- **测试隔离**：`setUp` 将 `models` 与 `cli` 的 `DATA_FILE`/`BACKUP_DIR`/`EXPORT_DIR` 重定向到临时目录，`tearDown` 删除，不会读写真实 `questions.json`。
+- **测试隔离**：`setUp` 将 `models` 与 `cli` 的 `BASE_DIR`/`DATA_FILE`/`BACKUP_DIR`/`EXPORT_DIR` 重定向到临时目录（`tempfile.mkdtemp`），`tearDown` 删除，不会读写真实 `questions.json`。注意 `BASE_DIR` 必须一并重定向——原子写入的临时文件与目标文件须同目录，跨卷 `os.replace` 会失败。
 - **输入模拟**：用 `unittest.mock.patch('builtins.input', side_effect=[...])` 依次提供模拟输入。
-- **覆盖范围**：数据层 4 个用例 + CLI 层 5 个用例，共 9 个用例。
+- **覆盖范围**：数据层 9 个用例 + CLI 层 5 个用例，共 **14 个用例**。
 
 > ⚠️ 测试依赖 `from models import ...` 的值拷贝特性，路径常量必须**双边同步更新**（`models.DATA_FILE = cli.DATA_FILE = ...`），否则会误读写真实数据文件。
 

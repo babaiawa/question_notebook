@@ -241,6 +241,8 @@ from models import DATA_FILE   # 这是"拷贝"了当时的字符串值！
 
 这是模块化开发中最容易踩的坑之一，理解了它，你对 Python 的模块机制就真正入门了。
 
+> **进阶坑**：项目加了"原子写入"后，测试隔离又多了一个要求——`BASE_DIR` 也必须重定向。因为原子写入的临时文件要和目标文件同目录（`os.replace` 跨文件系统会失败），如果只改 `DATA_FILE` 不改 `BASE_DIR`，临时文件写到真实项目目录、目标文件却在临时目录，跨盘替换直接报错。测试 `setUp` 里三行路径常量要一起改。
+
 ## 第 5 课：自动化测试（test_qn.py）
 
 ### 5.1 为什么测试很重要
@@ -265,10 +267,12 @@ with patch('builtins.input', side_effect=["测试问题", "描述", "编程"]):
 
 ```python
 self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
+models.BASE_DIR = cli.BASE_DIR = self.tmpdir
 models.DATA_FILE = cli.DATA_FILE = os.path.join(self.tmpdir, "questions.json")
+# BACKUP_DIR / EXPORT_DIR 同理
 ```
 
-**注意两边都要改**——就是第 4 课那个值拷贝陷阱的实战应用。
+**注意两边都要改**——就是第 4 课那个值拷贝陷阱的实战应用。`BASE_DIR` 也要改，原因见第 4 课的进阶坑（原子写入要求临时文件与目标文件同目录）。
 
 ### 5.4 测试要覆盖什么
 
