@@ -10,8 +10,11 @@ CLI 版（question_notebook.py）和 Web 版（web_app.py）共用本模块，
 - 本模块：只关心"数据长什么样"和"怎么存取"，不关心界面
 - 界面层（CLI/Web）：负责输入输出、菜单、路由，只调用本模块的函数
 """
-import json
+import contextlib
+import csv
 import datetime
+import io
+import json
 import os
 import re
 import shutil
@@ -186,10 +189,8 @@ def restore_data(filename):
 
 def build_csv(questions):
     """生成 CSV 内容（含 UTF-8 BOM 头，Excel 可直接识别），返回字符串。"""
-    import csv as _csv
-    import io as _io
-    output = _io.StringIO()
-    writer = _csv.writer(output)
+    output = io.StringIO()
+    writer = csv.writer(output)
     writer.writerow(CSV_HEADERS)
     for q in questions:
         writer.writerow([
@@ -197,3 +198,41 @@ def build_csv(questions):
             "是" if q.is_solved else "否", q.solution, q.category
         ])
     return '\ufeff' + output.getvalue()
+
+
+# ---------- 跨进程锁 ----------
+
+@contextlib.contextmanager
+def data_lock():
+    """跨进程写锁（基于文件锁），保护"读-改-写"事务。
+
+    - Windows 用 msvcrt.locking，Linux/macOS 用 fcntl.flock
+    - CLI 与 Web 同时运行、多进程/多 worker 部署时同样安全
+    - 注意：文件锁不可重入，因此锁放在调用方的事务层
+      （如 Web 写接口用 `with data_lock():` 包住整段读-改-写），
+      save_questions 等函数内部不再加锁，避免同进程重入死锁
+    """
+    lock_path = os.path.join(BASE_DIR, ".data.lock")
+    # 确保锁文件存在且至少有 1 字节（msvcrt.locking 的要求）
+    if not os.path.exists(lock_path):
+        with open(lock_path, 'w', encoding='utf-8') as f:
+            f.write('0')
+
+    with open(lock_path, 'r+', encoding='utf-8') as f:
+        if os.name == 'nt':
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == 'nt':
+                import msvcrt
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)

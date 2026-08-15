@@ -8,6 +8,7 @@ question_notebook.py - CLI 界面层
 import datetime
 import os
 
+import models
 from models import (
     Question,
     load_questions,
@@ -16,9 +17,6 @@ from models import (
     backup_data,
     list_backups,
     restore_data,
-    DATA_FILE,
-    BACKUP_DIR,
-    EXPORT_DIR,
     DEFAULT_CATEGORY,
 )
 
@@ -247,7 +245,7 @@ def backup_questions():
     if name is None:
         print("[提示] 还没有数据文件，无需备份。")
         return
-    print(f"[成功] 已备份到 {os.path.join(BACKUP_DIR, name)}")
+    print(f"[成功] 已备份到 {os.path.join(models.BACKUP_DIR, name)}")
 
 
 def restore_questions(questions):
@@ -318,9 +316,10 @@ def export_csv(questions):
         print("[提示] 当前没有数据可导出。")
         return
 
-    os.makedirs(EXPORT_DIR, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    export_path = os.path.join(EXPORT_DIR, f"questions_{timestamp}.csv")
+    os.makedirs(models.EXPORT_DIR, exist_ok=True)
+    # 文件名含微秒，同一秒内多次导出不会互相覆盖
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    export_path = os.path.join(models.EXPORT_DIR, f"questions_{timestamp}.csv")
 
     # 内容由数据层生成（含 BOM 头），界面层只负责写文件
     with open(export_path, 'w', encoding='utf-8', newline='') as file:
@@ -371,12 +370,12 @@ def view_by_category(questions):
 def main():
     """程序入口：加载数据，进入菜单循环。"""
     # 从数据层加载（文件不存在时给出提示，不报错）
-    if os.path.exists(DATA_FILE):
+    if os.path.exists(models.DATA_FILE):
         questions = load_questions()
-        print(f"成功从 {DATA_FILE} 加载了 {len(questions)} 个问题。")
+        print(f"成功从 {models.DATA_FILE} 加载了 {len(questions)} 个问题。")
     else:
         questions = []
-        print(f"数据文件 {DATA_FILE} 不存在，将创建一个新的文件。")
+        print(f"数据文件 {models.DATA_FILE} 不存在，将创建一个新的文件。")
 
     while True:
         print("\n=========================")

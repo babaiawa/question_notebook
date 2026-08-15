@@ -28,16 +28,13 @@ class TestModels(unittest.TestCase):
 
     def setUp(self):
         # 数据重定向到临时目录，隔离真实数据。
-        # 注意：cli 模块通过 `from models import ...` 导入常量，是值拷贝，
-        # 必须同时更新 models 和 cli 两边的路径，测试才不会碰到真实文件。
+        # CLI/Web 通过 models.X 动态访问路径常量（见 #7 重构），
+        # 因此只需改 models 一处，无需再同步 cli/web。
         self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
-        tmp_data = os.path.join(self.tmpdir, "questions.json")
-        tmp_backup = os.path.join(self.tmpdir, "backups")
-        tmp_export = os.path.join(self.tmpdir, "exports")
-        models.BASE_DIR = cli.BASE_DIR = self.tmpdir
-        models.DATA_FILE = cli.DATA_FILE = tmp_data
-        models.BACKUP_DIR = cli.BACKUP_DIR = tmp_backup
-        models.EXPORT_DIR = cli.EXPORT_DIR = tmp_export
+        models.BASE_DIR = self.tmpdir
+        models.DATA_FILE = os.path.join(self.tmpdir, "questions.json")
+        models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
+        models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -155,13 +152,10 @@ class TestCLI(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
-        tmp_data = os.path.join(self.tmpdir, "questions.json")
-        tmp_backup = os.path.join(self.tmpdir, "backups")
-        tmp_export = os.path.join(self.tmpdir, "exports")
-        models.BASE_DIR = cli.BASE_DIR = self.tmpdir
-        models.DATA_FILE = cli.DATA_FILE = tmp_data
-        models.BACKUP_DIR = cli.BACKUP_DIR = tmp_backup
-        models.EXPORT_DIR = cli.EXPORT_DIR = tmp_export
+        models.BASE_DIR = self.tmpdir
+        models.DATA_FILE = os.path.join(self.tmpdir, "questions.json")
+        models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
+        models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -197,8 +191,7 @@ class TestCLI(unittest.TestCase):
         """CSV 导出：生成文件且带 UTF-8 BOM"""
         questions = [models.Question(title="导出测试", category="测试")]
         models.save_questions(questions)
-        with patch('builtins.input', side_effect=["9"]):
-            cli.export_csv(questions)
+        cli.export_csv(questions)  # 无 input() 调用，不需要 mock
         files = os.listdir(models.EXPORT_DIR)
         self.assertEqual(len(files), 1)
         with open(os.path.join(models.EXPORT_DIR, files[0]), 'rb') as f:
@@ -235,6 +228,120 @@ class TestCLI(unittest.TestCase):
             cli.search_questions(questions)  # 应命中第一条
         with patch('builtins.input', side_effect=["Python 硬件"]):
             cli.search_questions(questions)  # 无结果，不崩溃
+
+
+class TestWeb(unittest.TestCase):
+    """Web 接口层测试（Flask test_client，无需启动真实服务）"""
+
+    @classmethod
+    def setUpClass(cls):
+        import web_app
+        cls.client = web_app.app.test_client()
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
+        models.BASE_DIR = self.tmpdir
+        models.DATA_FILE = os.path.join(self.tmpdir, "questions.json")
+        models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
+        models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _post_json(self, url, payload):
+        return self.client.post(
+            url,
+            data=json.dumps(payload) if payload is not None else '',
+            content_type='application/json'
+        )
+
+    def test_crud_flow(self):
+        """增删改查全链路"""
+        r = self.client.get('/api/questions')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json(), [])
+
+        r = self._post_json('/api/questions', {"title": "Web测试", "category": "测试"})
+        self.assertEqual(r.status_code, 201)
+        qid = r.get_json()["id"]
+        self.assertEqual(len(self.client.get('/api/questions').get_json()), 1)
+
+        r = self.client.put(f'/api/questions/{qid}',
+                            json={"is_solved": True, "solution": "方案"})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["is_solved"])
+
+        r = self.client.delete(f'/api/questions/{qid}')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.client.get('/api/questions').get_json(), [])
+
+    def test_bad_bodies(self):
+        """空 body / 非对象 JSON 一律 400"""
+        r = self.client.post('/api/questions', data='', content_type='application/json')
+        self.assertEqual(r.status_code, 400)
+        for bad in ([1, 2, 3], "abc", 123):
+            r = self._post_json('/api/questions', bad)
+            self.assertEqual(r.status_code, 400, f"body={bad!r}")
+            self.assertIn("error", r.get_json())
+
+    def test_empty_title(self):
+        """标题为空返回 400"""
+        r = self._post_json('/api/questions', {"title": "   "})
+        self.assertEqual(r.status_code, 400)
+
+    def test_is_solved_type_check(self):
+        """is_solved 必须是布尔：字符串 'false' 应被拒绝"""
+        r = self._post_json('/api/questions', {"title": "布尔测试"})
+        qid = r.get_json()["id"]
+        r = self.client.put(f'/api/questions/{qid}', json={"is_solved": "false"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("布尔", r.get_json()["error"])
+        r = self.client.put(f'/api/questions/{qid}', json={"is_solved": False})
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.get_json()["is_solved"])
+
+    def test_not_found(self):
+        """不存在的 ID 返回 404"""
+        self.assertEqual(self.client.put('/api/questions/999',
+                                         json={"title": "x"}).status_code, 404)
+        self.assertEqual(self.client.delete('/api/questions/999').status_code, 404)
+
+    def test_export_csv(self):
+        """CSV 导出：200 + BOM"""
+        self._post_json('/api/questions', {"title": "导出"})
+        r = self.client.get('/api/export')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('text/csv', r.content_type)
+        self.assertTrue(r.data.startswith(b'\xef\xbb\xbf'))
+
+    def test_backup_restore_flow(self):
+        """备份 → 清空 → 恢复 全链路"""
+        self._post_json('/api/questions', {"title": "备份前"})
+        r = self._post_json('/api/backup', None)
+        self.assertEqual(r.status_code, 200)
+        filename = r.get_json()["filename"]
+
+        for q in self.client.get('/api/questions').get_json():
+            self.client.delete(f"/api/questions/{q['id']}")
+        self.assertEqual(self.client.get('/api/questions').get_json(), [])
+
+        r = self._post_json('/api/restore', {"filename": filename})
+        self.assertEqual(r.status_code, 200)
+        data = self.client.get('/api/questions').get_json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["title"], "备份前")
+
+    def test_restore_rejects_bad_names(self):
+        """恢复接口拒绝非法文件名（路径穿越/前缀不符）"""
+        for bad in ("../questions.json", "evil.json", "questions.json"):
+            r = self._post_json('/api/restore', {"filename": bad})
+            self.assertEqual(r.status_code, 400, f"应拒绝 {bad}")
+
+    def test_backups_empty(self):
+        """无备份时返回空列表"""
+        r = self.client.get('/api/backups')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json(), [])
 
 
 if __name__ == "__main__":

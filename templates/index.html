@@ -272,10 +272,18 @@ function closeModal(id) { document.getElementById(id).classList.remove('show'); 
 
 // ========== 数据加载与渲染 ==========
 async function load() {
-  const res = await fetch('/api/questions');
-  questions = await res.json();
-  renderFilters();
-  render();
+  try {
+    const res = await fetch('/api/questions');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    questions = await res.json();
+    renderFilters();
+    render();
+  } catch (err) {
+    toast('❌ 加载失败，请确认服务已启动');
+    console.error('load() 失败:', err);
+    document.getElementById('grid').innerHTML =
+      '<div class="empty">加载失败… 请确认 python web_app.py 已启动</div>';
+  }
 }
 
 function renderFilters() {
@@ -384,18 +392,23 @@ async function saveEdit() {
 
   const url = editingId === null ? '/api/questions' : `/api/questions/${editingId}`;
   const method = editingId === null ? 'POST' : 'PUT';
-  const res = await fetch(url, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (res.ok) {
-    closeModal('editModal');
-    toast(editingId === null ? '✅ 问题已添加' : '✅ 问题已更新');
-    load();
-  } else {
-    const err = await res.json();
-    toast('❌ ' + (err.error || '保存失败'));
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.ok) {
+      closeModal('editModal');
+      toast(editingId === null ? '✅ 问题已添加' : '✅ 问题已更新');
+      load();
+    } else {
+      const err = await res.json();
+      toast('❌ ' + (err.error || '保存失败'));
+    }
+  } catch (err) {
+    toast('❌ 网络错误，保存失败');
+    console.error('saveEdit() 失败:', err);
   }
 }
 
@@ -412,17 +425,23 @@ function openSolveModal(id) {
 
 async function saveSolve() {
   const solution = document.getElementById('solveSolution').value.trim();
-  const res = await fetch(`/api/questions/${solvingId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ is_solved: true, solution })
-  });
-  if (res.ok) {
-    closeModal('solveModal');
-    toast('✅ 已标记为已解决');
-    load();
-  } else {
-    toast('❌ 操作失败');
+  try {
+    const res = await fetch(`/api/questions/${solvingId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_solved: true, solution })
+    });
+    if (res.ok) {
+      closeModal('solveModal');
+      toast('✅ 已标记为已解决');
+      load();
+    } else {
+      const err = await res.json();
+      toast('❌ ' + (err.error || '操作失败'));
+    }
+  } catch (err) {
+    toast('❌ 网络错误，操作失败');
+    console.error('saveSolve() 失败:', err);
   }
 }
 
@@ -437,13 +456,19 @@ function openDeleteModal(id) {
 }
 
 async function confirmDelete() {
-  const res = await fetch(`/api/questions/${deletingId}`, { method: 'DELETE' });
-  if (res.ok) {
-    closeModal('deleteModal');
-    toast('🗑️ 已删除');
-    load();
-  } else {
-    toast('❌ 删除失败');
+  try {
+    const res = await fetch(`/api/questions/${deletingId}`, { method: 'DELETE' });
+    if (res.ok) {
+      closeModal('deleteModal');
+      toast('🗑️ 已删除');
+      load();
+    } else {
+      const err = await res.json();
+      toast('❌ ' + (err.error || '删除失败'));
+    }
+  } catch (err) {
+    toast('❌ 网络错误，删除失败');
+    console.error('confirmDelete() 失败:', err);
   }
 }
 
@@ -453,30 +478,40 @@ function exportCsv() {
 }
 
 async function doBackup() {
-  const res = await fetch('/api/backup', { method: 'POST' });
-  const data = await res.json();
-  if (res.ok) {
-    toast(`💾 已备份：${data.filename}`);
-  } else {
-    toast('❌ ' + (data.error || '备份失败'));
+  try {
+    const res = await fetch('/api/backup', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      toast(`💾 已备份：${data.filename}`);
+    } else {
+      toast('❌ ' + (data.error || '备份失败'));
+    }
+  } catch (err) {
+    toast('❌ 网络错误，备份失败');
+    console.error('doBackup() 失败:', err);
   }
 }
 
 async function openRestoreModal() {
   selectedBackup = null;
-  const res = await fetch('/api/backups');
-  const backups = await res.json();
-  const list = document.getElementById('backupList');
-  if (!backups.length) {
-    list.innerHTML = '<div style="padding:14px;color:#64748b;font-size:13px;">还没有任何备份</div>';
-  } else {
-    list.innerHTML = backups.map((name, i) => `
-      <div class="backup-item" data-name="${esc(name)}" onclick="pickBackup(this, '${esc(name)}')">
-        <span>${esc(name)}</span><span>${i === 0 ? '🆕 最新' : ''}</span>
-      </div>
-    `).join('');
+  try {
+    const res = await fetch('/api/backups');
+    const backups = await res.json();
+    const list = document.getElementById('backupList');
+    if (!backups.length) {
+      list.innerHTML = '<div style="padding:14px;color:#64748b;font-size:13px;">还没有任何备份</div>';
+    } else {
+      list.innerHTML = backups.map((name, i) => `
+        <div class="backup-item" data-name="${esc(name)}" onclick="pickBackup(this, '${esc(name)}')">
+          <span>${esc(name)}</span><span>${i === 0 ? '🆕 最新' : ''}</span>
+        </div>
+      `).join('');
+    }
+    openModal('restoreModal');
+  } catch (err) {
+    toast('❌ 加载备份列表失败');
+    console.error('openRestoreModal() 失败:', err);
   }
-  openModal('restoreModal');
 }
 
 function pickBackup(el, name) {
@@ -488,18 +523,23 @@ function pickBackup(el, name) {
 async function confirmRestore() {
   if (!selectedBackup) { toast('⚠️ 请先选择一个备份'); return; }
   if (!confirm(`确定从 ${selectedBackup} 恢复吗？当前数据会被覆盖！`)) return;
-  const res = await fetch('/api/restore', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filename: selectedBackup })
-  });
-  if (res.ok) {
-    closeModal('restoreModal');
-    toast('♻️ 数据已恢复');
-    load();
-  } else {
-    const err = await res.json();
-    toast('❌ ' + (err.error || '恢复失败'));
+  try {
+    const res = await fetch('/api/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: selectedBackup })
+    });
+    if (res.ok) {
+      closeModal('restoreModal');
+      toast('♻️ 数据已恢复');
+      load();
+    } else {
+      const err = await res.json();
+      toast('❌ ' + (err.error || '恢复失败'));
+    }
+  } catch (err) {
+    toast('❌ 网络错误，恢复失败');
+    console.error('confirmRestore() 失败:', err);
   }
 }
 

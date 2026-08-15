@@ -8,3 +8,6 @@ questions.json.bak
 
 # Trae 工具产物（HTML 分享包等，非项目内容）
 .trae-html-share-packages/
+
+# 跨进程锁文件（运行时生成）
+.data.lock

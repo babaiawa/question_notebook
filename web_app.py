@@ -7,7 +7,6 @@ web_app.py - Web 界面层
 """
 import datetime
 import io
-import threading
 
 from flask import Flask, request, jsonify, render_template, send_file
 
@@ -20,16 +19,13 @@ from models import (
     backup_data,
     list_backups,
     restore_data,
+    data_lock,
     DEFAULT_CATEGORY,
 )
 
 app = Flask(__name__)
 # 让 JSON 响应里的中文原样输出，而不是 \uXXXX 转义
 app.json.ensure_ascii = False
-
-# 写操作锁：Flask 开发服务器默认多线程，读-改-写三段式操作
-# 必须加锁串行化，否则并发请求会互相覆盖（丢数据）
-_write_lock = threading.Lock()
 
 
 def _get_json_body():
@@ -67,7 +63,7 @@ def api_add():
     if not title:
         return jsonify({"error": "标题不能为空"}), 400
 
-    with _write_lock:
+    with data_lock():
         q = Question(
             title=title,
             description=(data.get('description') or '').strip(),
@@ -86,7 +82,7 @@ def api_update(qid):
     if data is None:
         return jsonify({"error": "请求体必须是 JSON"}), 400
 
-    with _write_lock:
+    with data_lock():
         questions = load_questions()
         for q in questions:
             if q.id == qid:
@@ -101,7 +97,10 @@ def api_update(qid):
                     if cat:
                         q.category = cat
                 if 'is_solved' in data:
-                    q.is_solved = bool(data.get('is_solved'))
+                    # 严格类型校验：字符串 "false" 不能当 True 用
+                    if not isinstance(data.get('is_solved'), bool):
+                        return jsonify({"error": "is_solved 必须是布尔值"}), 400
+                    q.is_solved = data['is_solved']
                 if 'solution' in data:
                     q.solution = (data.get('solution') or '').strip()
                 save_questions(questions)
@@ -112,7 +111,7 @@ def api_update(qid):
 @app.route('/api/questions/<int:qid>', methods=['DELETE'])
 def api_delete(qid):
     """删除问题。"""
-    with _write_lock:
+    with data_lock():
         questions = load_questions()
         new_list = [q for q in questions if q.id != qid]
         if len(new_list) == len(questions):
@@ -128,7 +127,8 @@ def api_export():
     """导出 CSV（UTF-8 BOM，Excel 打开不乱码）。"""
     questions = load_questions()
     content = build_csv(questions)
-    filename = f'questions_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+    # 文件名含微秒，同一秒内多次导出不会互相覆盖
+    filename = f'questions_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")}.csv'
     return send_file(
         io.BytesIO(content.encode('utf-8')),
         mimetype='text/csv',
@@ -140,7 +140,7 @@ def api_export():
 @app.route('/api/backup', methods=['POST'])
 def api_backup():
     """一键备份到 backups/ 目录（带时间戳）。"""
-    with _write_lock:
+    with data_lock():
         name = backup_data()
     if name is None:
         return jsonify({"error": "没有数据可备份"}), 400
@@ -160,7 +160,7 @@ def api_restore():
     if data is None:
         return jsonify({"error": "请求体必须是 JSON"}), 400
     filename = data.get('filename', '')
-    with _write_lock:
+    with data_lock():
         ok = restore_data(filename)
     if not ok:
         return jsonify({"error": "无效的备份文件名"}), 400
