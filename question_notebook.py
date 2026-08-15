@@ -22,6 +22,15 @@ from models import (
 )
 
 
+def _refresh(questions):
+    """读操作前刷新内存快照：从磁盘重新加载，反映 Web 端的最新改动。
+
+    原子写入保证读到的文件永远是完整的（旧或新），因此无需加锁。
+    """
+    questions.clear()
+    questions.extend(load_questions())
+
+
 def print_questions(questions, header, empty_msg="当前空空如也，快去添加第一个问题吧！"):
     """格式化输出问题列表（查看全部/筛选/分类查看共用）。"""
     print(f"\n{header}")
@@ -72,7 +81,8 @@ def add_question(questions):
 
 
 def list_questions(questions):
-    """输出全部问题。"""
+    """输出全部问题（读操作前刷新内存快照）。"""
+    _refresh(questions)
     print_questions(questions, "--- 我的问题笔记本 ---")
 
 
@@ -157,8 +167,10 @@ def search_questions(questions):
     """关键词搜索（忽略大小写，匹配标题/描述/方案/分类）。
 
     支持空格分隔多个关键词，全部命中才算匹配（如：python 报错）。
+    搜索前刷新内存快照，反映 Web 端最新改动。
     """
     print("\n--- [?] 搜索问题 ---")
+    _refresh(questions)
     keyword = input("请输入搜索关键词 (多个词用空格分隔，如: python 报错): ").strip()
 
     if not keyword:
@@ -254,8 +266,9 @@ def edit_question(questions):
 
 
 def filter_questions(questions):
-    """按解决状态筛选问题。"""
+    """按解决状态筛选问题（筛选前刷新内存快照）。"""
     print("\n--- [f] 按状态筛选 ---")
+    _refresh(questions)
     print("  1. 只看未解决")
     print("  2. 只看已解决")
     print("  0. 返回主菜单")
@@ -365,8 +378,9 @@ def export_csv(questions):
 
 
 def view_by_category(questions):
-    """按分类查看问题。"""
+    """按分类查看问题（查看前刷新内存快照）。"""
     print("\n--- [g] 按分类查看 ---")
+    _refresh(questions)
 
     if not questions:
         print("[提示] 当前没有数据。")
