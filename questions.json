@@ -5,7 +5,8 @@
         "description": "我是个编程新手，想从Python开始，有什么建议吗？",
         "timestamp": "2026-07-24 11:10:38",
         "is_solved": false,
-        "solution": ""
+        "solution": "",
+        "category": "未分类"
     },
     {
         "id": 2,
@@ -13,7 +14,8 @@
         "description": "每次开机都要转很久的圈，大概1分钟以上，怎么回事？",
         "timestamp": "2026-07-24 11:10:38",
         "is_solved": true,
-        "solution": "清理了开机启动项，问题解决了一半。"
+        "solution": "清理了开机启动项，问题解决了一半。",
+        "category": "未分类"
     },
     {
         "id": 3,
@@ -21,6 +23,7 @@
         "description": "编码问题导致报错",
         "timestamp": "2026-07-24 11:34:54",
         "is_solved": true,
-        "solution": "固定编码为8，让AI帮忙改。"
+        "solution": "固定编码为8，让AI帮忙改。",
+        "category": "未分类"
     }
 ]

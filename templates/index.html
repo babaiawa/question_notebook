@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>问题笔记本</title>
+<style>
+  /* ========== 基础 ========== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    min-height: 100vh;
+  }
+
+  /* ========== 顶栏 ========== */
+  .header {
+    position: sticky; top: 0; z-index: 10;
+    background: #1e293b;
+    border-bottom: 1px solid #334155;
+    padding: 14px 24px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  }
+  .header h1 {
+    font-size: 20px; color: #38bdf8;
+    margin-right: 8px; white-space: nowrap;
+  }
+  .header input[type="text"], .header select {
+    background: #0f172a; color: #e2e8f0;
+    border: 1px solid #334155; border-radius: 8px;
+    padding: 8px 12px; font-size: 14px; outline: none;
+  }
+  .header input[type="text"]:focus, .header select:focus {
+    border-color: #38bdf8;
+  }
+  .search-box { flex: 1; min-width: 180px; max-width: 320px; }
+
+  /* ========== 按钮 ========== */
+  .btn {
+    background: #334155; color: #e2e8f0;
+    border: none; border-radius: 8px;
+    padding: 8px 14px; font-size: 14px; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: #475569; }
+  .btn-primary { background: #0284c7; }
+  .btn-primary:hover { background: #0369a1; }
+  .btn-success { background: #16a34a; }
+  .btn-success:hover { background: #15803d; }
+  .btn-danger { background: #dc2626; }
+  .btn-danger:hover { background: #b91c1c; }
+  .btn-sm { padding: 5px 10px; font-size: 13px; border-radius: 6px; }
+
+  /* ========== 统计条 ========== */
+  .stats {
+    padding: 12px 24px 0;
+    font-size: 13px; color: #94a3b8;
+    display: flex; gap: 18px; flex-wrap: wrap;
+  }
+  .stats b { color: #38bdf8; }
+
+  /* ========== 卡片列表 ========== */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+    padding: 16px 24px 40px;
+  }
+  .card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 16px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: border-color 0.15s;
+  }
+  .card:hover { border-color: #475569; }
+  .card.solved { opacity: 0.75; }
+  .card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .card-title { font-size: 16px; font-weight: 600; flex: 1; word-break: break-all; }
+  .badge {
+    font-size: 12px; padding: 3px 8px; border-radius: 999px;
+    white-space: nowrap;
+  }
+  .badge-cat { background: #1d4ed8; color: #bfdbfe; }
+  .badge-open { background: #b45309; color: #fde68a; }
+  .badge-done { background: #15803d; color: #bbf7d0; }
+  .card-time { font-size: 12px; color: #64748b; }
+  .card-desc { font-size: 14px; color: #cbd5e1; word-break: break-all; }
+  .card-solution {
+    font-size: 13px; color: #86efac;
+    background: #052e16; border: 1px solid #166534;
+    border-radius: 8px; padding: 8px 10px; word-break: break-all;
+  }
+  .card-actions { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+  .empty {
+    grid-column: 1 / -1;
+    text-align: center; color: #64748b;
+    padding: 60px 0; font-size: 15px;
+  }
+
+  /* ========== 模态框 ========== */
+  .modal-mask {
+    display: none;
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0, 0, 0, 0.6);
+    align-items: center; justify-content: center;
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 14px;
+    width: 90%; max-width: 460px;
+    padding: 22px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .modal h2 { font-size: 18px; margin-bottom: 16px; color: #38bdf8; }
+  .modal label {
+    display: block; font-size: 13px; color: #94a3b8;
+    margin: 12px 0 4px;
+  }
+  .modal input[type="text"], .modal textarea {
+    width: 100%;
+    background: #0f172a; color: #e2e8f0;
+    border: 1px solid #334155; border-radius: 8px;
+    padding: 9px 12px; font-size: 14px; outline: none;
+    font-family: inherit;
+  }
+  .modal input:focus, .modal textarea:focus { border-color: #38bdf8; }
+  .modal textarea { resize: vertical; min-height: 70px; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+  .backup-list {
+    max-height: 260px; overflow-y: auto;
+    border: 1px solid #334155; border-radius: 8px;
+  }
+  .backup-item {
+    padding: 10px 12px; font-size: 13px; cursor: pointer;
+    border-bottom: 1px solid #1e293b;
+    display: flex; justify-content: space-between; gap: 8px;
+  }
+  .backup-item:hover { background: #0f172a; }
+  .backup-item.selected { background: #0c4a6e; }
+
+  /* ========== 轻提示 ========== */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #334155; color: #f1f5f9;
+    padding: 10px 20px; border-radius: 10px; font-size: 14px;
+    z-index: 200; display: none;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  }
+  .toast.show { display: block; animation: fadein 0.2s; }
+  @keyframes fadein { from { opacity: 0; transform: translateX(-50%) translateY(8px); } }
+
+  @media (max-width: 640px) {
+    .header { padding: 12px 16px; }
+    .grid { padding: 12px 16px 32px; }
+    .search-box { max-width: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== 顶栏 ===== -->
+<div class="header">
+  <h1>📒 问题笔记本</h1>
+  <input type="text" id="searchInput" class="search-box" placeholder="搜索… 多个词用空格分隔">
+  <select id="statusFilter">
+    <option value="all">全部状态</option>
+    <option value="open">未解决</option>
+    <option value="solved">已解决</option>
+  </select>
+  <select id="categoryFilter">
+    <option value="all">全部分类</option>
+  </select>
+  <button class="btn btn-primary" onclick="openAddModal()">＋ 添加问题</button>
+  <button class="btn" onclick="exportCsv()">📥 导出 CSV</button>
+  <button class="btn" onclick="doBackup()">💾 备份</button>
+  <button class="btn" onclick="openRestoreModal()">♻️ 恢复</button>
+</div>
+
+<!-- ===== 统计条 ===== -->
+<div class="stats" id="stats"></div>
+
+<!-- ===== 卡片列表 ===== -->
+<div class="grid" id="grid"></div>
+
+<!-- ===== 添加 / 编辑模态框 ===== -->
+<div class="modal-mask" id="editModal">
+  <div class="modal">
+    <h2 id="editModalTitle">添加问题</h2>
+    <label>标题 *</label>
+    <input type="text" id="editTitle" placeholder="问题标题">
+    <label>描述</label>
+    <textarea id="editDesc" placeholder="问题详细描述（可选）"></textarea>
+    <label>分类</label>
+    <input type="text" id="editCategory" placeholder="未分类">
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('editModal')">取消</button>
+      <button class="btn btn-primary" id="editSaveBtn" onclick="saveEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 标记解决模态框 ===== -->
+<div class="modal-mask" id="solveModal">
+  <div class="modal">
+    <h2>✅ 标记为已解决</h2>
+    <p id="solveTitle" style="font-size:14px;color:#94a3b8;margin-bottom:4px;"></p>
+    <label>解决方案 / 心得</label>
+    <textarea id="solveSolution" placeholder="写下你是怎么解决的…"></textarea>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('solveModal')">取消</button>
+      <button class="btn btn-success" onclick="saveSolve()">标记解决</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 删除确认模态框 ===== -->
+<div class="modal-mask" id="deleteModal">
+  <div class="modal">
+    <h2>🗑️ 删除问题</h2>
+    <p style="font-size:14px;color:#cbd5e1;">确定要删除 <b id="deleteTitle"></b> 吗？此操作不可恢复。</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('deleteModal')">取消</button>
+      <button class="btn btn-danger" onclick="confirmDelete()">删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 恢复模态框 ===== -->
+<div class="modal-mask" id="restoreModal">
+  <div class="modal">
+    <h2>♻️ 从备份恢复</h2>
+    <p style="font-size:13px;color:#94a3b8;margin-bottom:10px;">恢复会覆盖当前全部数据，请谨慎操作。</p>
+    <div class="backup-list" id="backupList"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('restoreModal')">取消</button>
+      <button class="btn btn-danger" onclick="confirmRestore()">恢复所选</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== 全局状态 ==========
+let questions = [];          // 全部问题（从后端拉取）
+let selectedBackup = null;   // 恢复弹窗里选中的备份文件
+let editingId = null;        // 正在编辑的问题 ID（null = 新增）
+
+// ========== 工具函数 ==========
+function esc(s) {
+  // HTML 转义，防止特殊字符破坏页面结构
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+// ========== 数据加载与渲染 ==========
+async function load() {
+  const res = await fetch('/api/questions');
+  questions = await res.json();
+  renderFilters();
+  render();
+}
+
+function renderFilters() {
+  // 分类下拉：从数据里动态生成（去重）
+  const cats = [...new Set(questions.map(q => q.category))].sort();
+  const sel = document.getElementById('categoryFilter');
+  const current = sel.value;
+  sel.innerHTML = '<option value="all">全部分类</option>' +
+    cats.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sel.value = current;
+}
+
+function currentFilter() {
+  const kw = document.getElementById('searchInput').value.trim().toLowerCase();
+  const status = document.getElementById('statusFilter').value;
+  const cat = document.getElementById('categoryFilter').value;
+  return { kw, status, cat };
+}
+
+function render() {
+  const { kw, status, cat } = currentFilter();
+  const keywords = kw ? kw.split(/\s+/) : [];
+
+  // 过滤：状态 + 分类 + 多关键词（全部命中才算）
+  const filtered = questions.filter(q => {
+    if (status === 'open' && q.is_solved) return false;
+    if (status === 'solved' && !q.is_solved) return false;
+    if (cat !== 'all' && q.category !== cat) return false;
+    if (keywords.length) {
+      const text = [q.title, q.description, q.solution, q.category].join(' ').toLowerCase();
+      if (!keywords.every(k => text.includes(k))) return false;
+    }
+    return true;
+  });
+
+  // 统计条
+  const open = questions.filter(q => !q.is_solved).length;
+  const solved = questions.length - open;
+  document.getElementById('stats').innerHTML =
+    `共 <b>${questions.length}</b> 条 · 未解决 <b style="color:#fbbf24">${open}</b> · 已解决 <b style="color:#4ade80">${solved}</b>` +
+    (filtered.length !== questions.length ? ` · 当前显示 <b>${filtered.length}</b> 条` : '');
+
+  // 卡片
+  const grid = document.getElementById('grid');
+  if (!filtered.length) {
+    grid.innerHTML = '<div class="empty">空空如也～ 点击右上角「添加问题」记下第一个问题吧</div>';
+    return;
+  }
+
+  grid.innerHTML = filtered.map(q => `
+    <div class="card ${q.is_solved ? 'solved' : ''}">
+      <div class="card-top">
+        <span class="badge badge-cat">${esc(q.category)}</span>
+        <span class="card-title">${esc(q.title)}</span>
+        <span class="badge ${q.is_solved ? 'badge-done' : 'badge-open'}">${q.is_solved ? '已解决' : '未解决'}</span>
+      </div>
+      <div class="card-time">🕐 ${esc(q.timestamp)}</div>
+      ${q.description ? `<div class="card-desc">${esc(q.description)}</div>` : ''}
+      ${q.is_solved && q.solution ? `<div class="card-solution">💡 ${esc(q.solution)}</div>` : ''}
+      <div class="card-actions">
+        <button class="btn btn-sm" onclick="openEditModal(${q.id})">✏️ 编辑</button>
+        ${q.is_solved
+          ? `<button class="btn btn-sm btn-success" onclick="openSolveModal(${q.id})">📝 改方案</button>`
+          : `<button class="btn btn-sm btn-success" onclick="openSolveModal(${q.id})">✅ 标记解决</button>`}
+        <button class="btn btn-sm btn-danger" onclick="openDeleteModal(${q.id})">🗑️ 删除</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// 搜索框 / 筛选变化时重新渲染
+document.getElementById('searchInput').addEventListener('input', render);
+document.getElementById('statusFilter').addEventListener('change', render);
+document.getElementById('categoryFilter').addEventListener('change', render);
+
+// ========== 添加 / 编辑 ==========
+function openAddModal() {
+  editingId = null;
+  document.getElementById('editModalTitle').textContent = '添加问题';
+  document.getElementById('editTitle').value = '';
+  document.getElementById('editDesc').value = '';
+  document.getElementById('editCategory').value = '';
+  openModal('editModal');
+  document.getElementById('editTitle').focus();
+}
+
+function openEditModal(id) {
+  const q = questions.find(x => x.id === id);
+  if (!q) return;
+  editingId = id;
+  document.getElementById('editModalTitle').textContent = '编辑问题';
+  document.getElementById('editTitle').value = q.title;
+  document.getElementById('editDesc').value = q.description;
+  document.getElementById('editCategory').value = q.category;
+  openModal('editModal');
+}
+
+async function saveEdit() {
+  const title = document.getElementById('editTitle').value.trim();
+  if (!title) { toast('⚠️ 标题不能为空'); return; }
+  const body = {
+    title,
+    description: document.getElementById('editDesc').value.trim(),
+    category: document.getElementById('editCategory').value.trim()
+  };
+
+  const url = editingId === null ? '/api/questions' : `/api/questions/${editingId}`;
+  const method = editingId === null ? 'POST' : 'PUT';
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.ok) {
+    closeModal('editModal');
+    toast(editingId === null ? '✅ 问题已添加' : '✅ 问题已更新');
+    load();
+  } else {
+    const err = await res.json();
+    toast('❌ ' + (err.error || '保存失败'));
+  }
+}
+
+// ========== 标记解决 ==========
+let solvingId = null;
+function openSolveModal(id) {
+  const q = questions.find(x => x.id === id);
+  if (!q) return;
+  solvingId = id;
+  document.getElementById('solveTitle').textContent = q.title;
+  document.getElementById('solveSolution').value = q.solution || '';
+  openModal('solveModal');
+}
+
+async function saveSolve() {
+  const solution = document.getElementById('solveSolution').value.trim();
+  const res = await fetch(`/api/questions/${solvingId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_solved: true, solution })
+  });
+  if (res.ok) {
+    closeModal('solveModal');
+    toast('✅ 已标记为已解决');
+    load();
+  } else {
+    toast('❌ 操作失败');
+  }
+}
+
+// ========== 删除 ==========
+let deletingId = null;
+function openDeleteModal(id) {
+  const q = questions.find(x => x.id === id);
+  if (!q) return;
+  deletingId = id;
+  document.getElementById('deleteTitle').textContent = `「${q.title}」`;
+  openModal('deleteModal');
+}
+
+async function confirmDelete() {
+  const res = await fetch(`/api/questions/${deletingId}`, { method: 'DELETE' });
+  if (res.ok) {
+    closeModal('deleteModal');
+    toast('🗑️ 已删除');
+    load();
+  } else {
+    toast('❌ 删除失败');
+  }
+}
+
+// ========== 导出 / 备份 / 恢复 ==========
+function exportCsv() {
+  window.location.href = '/api/export';
+}
+
+async function doBackup() {
+  const res = await fetch('/api/backup', { method: 'POST' });
+  const data = await res.json();
+  if (res.ok) {
+    toast(`💾 已备份：${data.filename}`);
+  } else {
+    toast('❌ ' + (data.error || '备份失败'));
+  }
+}
+
+async function openRestoreModal() {
+  selectedBackup = null;
+  const res = await fetch('/api/backups');
+  const backups = await res.json();
+  const list = document.getElementById('backupList');
+  if (!backups.length) {
+    list.innerHTML = '<div style="padding:14px;color:#64748b;font-size:13px;">还没有任何备份</div>';
+  } else {
+    list.innerHTML = backups.map((name, i) => `
+      <div class="backup-item" data-name="${esc(name)}" onclick="pickBackup(this, '${esc(name)}')">
+        <span>${esc(name)}</span><span>${i === 0 ? '🆕 最新' : ''}</span>
+      </div>
+    `).join('');
+  }
+  openModal('restoreModal');
+}
+
+function pickBackup(el, name) {
+  document.querySelectorAll('.backup-item').forEach(x => x.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedBackup = name;
+}
+
+async function confirmRestore() {
+  if (!selectedBackup) { toast('⚠️ 请先选择一个备份'); return; }
+  if (!confirm(`确定从 ${selectedBackup} 恢复吗？当前数据会被覆盖！`)) return;
+  const res = await fetch('/api/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: selectedBackup })
+  });
+  if (res.ok) {
+    closeModal('restoreModal');
+    toast('♻️ 数据已恢复');
+    load();
+  } else {
+    const err = await res.json();
+    toast('❌ ' + (err.error || '恢复失败'));
+  }
+}
+
+// ========== 启动 ==========
+load();
+</script>
+</body>
+</html>

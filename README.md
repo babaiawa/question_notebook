@@ -1,6 +1,10 @@
 # 问题笔记本 (Question Notebook)
 
-一个基于 Python 命令行的问题记录工具。把平时遇到的技术问题、学习疑问随手记下来，解决了就标记状态、写上解决方案，方便日后回顾。
+一个基于 Python 的问题记录工具，**双版本**：
+- **CLI 版**：命令行交互，轻量快速
+- **Web 版**：浏览器界面，可视化操作
+
+把平时遇到的技术问题、学习疑问随手记下来，解决了就标记状态、写上解决方案，方便日后回顾。两个版本共用同一份数据，随时随地切换。
 
 ## 功能特性
 
@@ -19,6 +23,7 @@
 ## 环境要求
 
 - Python 3.x（无需安装任何第三方库）
+- Web 版需要额外安装 Flask：`pip install flask`
 
 ## 使用方法
 
@@ -49,6 +54,23 @@ python question_notebook.py
 ```
 
 输入对应数字编号即可操作。首次运行会自动创建 `questions.json` 数据文件。
+
+## Web 版使用
+
+```bash
+python web_app.py
+```
+
+浏览器打开 **http://127.0.0.1:5000** 即可使用，功能与 CLI 版对齐：
+
+- 问题卡片列表：分类/状态徽章、时间、描述、解决方案一目了然
+- 实时搜索（多关键词，空格分隔）
+- 状态筛选（未解决/已解决）+ 分类筛选
+- 添加 / 编辑 / 标记解决 / 删除（带确认）
+- 一键导出 CSV（浏览器直接下载，Excel 可开）
+- 一键备份 + 从备份恢复
+
+> Web 版与 CLI 版读写同一个 `questions.json`，两边数据完全互通。
 
 ## 数据存储
 
@@ -83,7 +105,10 @@ CSV 导出文件存放在项目下 `exports/` 目录（UTF-8 BOM 编码，Excel 
 
 ```
 question_notebook/
-├── question_notebook.py   # 主程序（入口）
+├── question_notebook.py   # CLI 版主程序
+├── web_app.py             # Web 版服务（Flask）
+├── templates/
+│   └── index.html         # Web 版前端页面
 ├── questions.json         # 数据文件（首次运行自动生成）
 ├── backups/               # 备份目录（备份时自动创建）
 ├── exports/               # CSV 导出目录（导出时自动创建）
@@ -102,6 +127,11 @@ question_notebook/
 - `main()`：程序入口，菜单循环 + 用户交互
 
 ## 更新日志
+
+**2026-08-15（第四批：Web 版）**
+- 新增 Web 版（Flask + 原生 HTML/CSS/JS）：`python web_app.py` 启动，浏览器访问 http://127.0.0.1:5000
+- 页面功能对齐 CLI：卡片列表、实时多关键词搜索、状态/分类筛选、增删改、标记解决、CSV 导出、备份恢复
+- 前后端共用同一份 `questions.json`，数据互通；REST API 设计（`/api/questions` 增删改查）
 
 **2026-08-15（第三批）**
 - 新增「导出 CSV」功能（菜单选项 9）：导出到 `exports/` 目录，UTF-8 BOM 编码，Excel 直接打开中文不乱码
