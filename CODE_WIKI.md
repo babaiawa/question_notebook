@@ -42,22 +42,25 @@ Question Notebook 是一个**轻量级个人问题记录与知识管理工具**�
 
 ```
 question_notebook/
-├── models.py              # 数据层：Question 模型 + JSON 读写
+├── models.py              # 数据层：Question 模型 + JSON 读写 + 跨进程锁
 ├── question_notebook.py   # CLI 界面层
-├── web_app.py             # Web 界面层（Flask 路由）
-├── test_qn.py             # 自动化测试（数据层 + CLI 层）
+├── web_app.py             # Web 界面层（Flask 路由 + 认证 + CSRF）
+├── test_qn.py             # 自动化测试（数据层 + CLI 层 + Web 层）
 ├── templates/
-│   └── index.html         # Web 前端页面（内嵌 CSS + JS）
+│   └── index.html         # Web 前端页面（内嵌 CSS + JS + 登录页）
 ├── questions.json         # 数据文件（首次运行自动生成）
+├── .flask_secret          # Flask 会话签名密钥（首次运行自动生成）
+├── .auth_salt             # 密码哈希盐（启用认证后自动生成）
 ├── backups/               # 备份目录（备份时自动创建）
 ├── exports/               # CSV 导出目录（导出时自动创建）
 ├── README.md              # 项目说明文档
 ├── TUTORIAL.md            # 教学文档
 ├── ROADMAP.md             # 路线图
+├── CODE_WIKI.md           # 代码级知识库（本文档）
 └── .gitignore             # Git 忽略规则
 ```
 
-> 运行期动态生成的目录：`backups/`、`exports/` 以及损坏文件的 `.bak` 备份均不在版本控制中。
+> 运行期动态生成的目录和文件（`backups/`、`exports/`、`.flask_secret`、`.auth_salt`、损坏文件的 `.bak`）不在版本控制中。
 
 ---
 
@@ -100,11 +103,11 @@ question_notebook/
 
 | 模块 | 层级 | 职责 |
 |------|------|------|
-| `models.py` | 数据层 | 定义 `Question` 模型、序列化/反序列化、JSON 文件读写、路径常量 |
+| `models.py` | 数据层 | 定义 `Question` 模型、序列化/反序列化、JSON 文件读写、跨进程写锁、路径常量 |
 | `question_notebook.py` | 界面层（CLI） | 命令行菜单循环、交互式增删改查、备份恢复、CSV 导出、分类浏览 |
-| `web_app.py` | 界面层（Web） | Flask 应用、REST 路由、HTTP 请求校验与响应、导出/备份/恢复接口 |
-| `templates/index.html` | 界面层（前端） | 浏览器渲染、`fetch` 调用 API、搜索筛选、模态框交互 |
-| `test_qn.py` | 测试层 | 数据层与 CLI 层的自动化测试，测试数据隔离 |
+| `web_app.py` | 界面层（Web） | Flask 应用、REST 路由、密码认证、CSRF 防护、HTTP 请求校验与响应、导出/备份/恢复接口 |
+| `templates/index.html` | 界面层（前端） | 浏览器渲染、登录页、`fetch` 调用 API、搜索筛选、模态框交互 |
+| `test_qn.py` | 测试层 | 数据层、CLI 层与 Web 层（含认证与 CSRF）的自动化测试，测试数据隔离 |
 
 ### 4.2 依赖关系图
 
@@ -137,6 +140,7 @@ web_app.py ───────────────────────
 | `list_backups` | 函数 | CLI、Web、测试 |
 | `restore_data` | 函数 | CLI、Web、测试 |
 | `build_csv` | 函数 | CLI、Web、测试 |
+| `data_lock` | 上下文管理器 | CLI、Web（写事务加锁） |
 | `DATA_FILE` | 常量 | CLI、Web、测试 |
 | `BACKUP_DIR` | 常量 | CLI、测试 |
 | `EXPORT_DIR` | 常量 | CLI、测试 |
@@ -214,7 +218,7 @@ def save_questions(questions):
 
 - 先扫描已有最大 `id`，对 `id is None` 的新对象自增分配 ID。
 - 以 `indent=4`、`ensure_ascii=False` 写入（格式化、保留中文）。
-- **原子写入**：先写同目录临时文件（`tempfile.mkstemp`），再 `os.replace` 原子替换目标文件。写入中途进程崩溃/断电不会留下半个 JSON；任何异常都会清理临时文件。
+- **原子写入**：委托 `_atomic_write()` 完成（先写同目录临时文件，再 `os.replace` 原子替换）。写入中途进程崩溃/断电不会留下半个 JSON；任何异常都会清理临时文件。
 
 #### 数据操作函数（备份/恢复/导出，CLI 与 Web 共用）
 
@@ -222,12 +226,30 @@ def save_questions(questions):
 |------|------|
 | `backup_data()` | 复制 `DATA_FILE` 到 `BACKUP_DIR`，文件名 `questions_YYYYMMDD_HHMMSS_微秒.json`（微秒避免同秒覆盖），返回文件名；无数据文件返回 `None` |
 | `list_backups()` | 列出全部备份文件名（新的在前），仅认符合 `BACKUP_NAME_PATTERN` 的文件 |
-| `restore_data(filename)` | 从备份恢复：正则白名单校验文件名（拒绝路径穿越与不合规命名），成功返回 `True` |
+| `restore_data(filename)` | 从备份恢复：正则白名单校验文件名（拒绝路径穿越与不合规命名），读取备份内容后经 `_atomic_write` 原子写回，成功返回 `True` |
 | `build_csv(questions)` | 生成 CSV 内容字符串（含 `\ufeff` BOM 头），由调用方负责写文件/下载 |
+
+#### 函数 `_atomic_write(content)`
+
+将字符串原子写入 `DATA_FILE`：先在同目录写临时文件（`tempfile.mkstemp`），再 `os.replace` 原子替换目标；末尾补换行，异常时清理临时文件。`save_questions` 与 `restore_data` 均复用它。
+
+#### 跨进程锁 `data_lock()`
+
+基于文件锁的上下文管理器（`@contextlib.contextmanager`），保护"读-改-写"事务：
+
+- Windows 用 `msvcrt.locking`，Linux/macOS 用 `fcntl.flock` 独占锁。
+- 锁文件为 `BASE_DIR/.data.lock`，锁放在调用方事务层（如 `with data_lock():` 包住整段读-改-写），`save_questions` 等函数内部不再加锁，避免同进程重入死锁。
+- 使 CLI 与 Web 同时运行、多进程/多 worker 部署时写操作同样串行安全。
 
 ---
 
 ### 5.2 question_notebook.py（CLI 界面层）
+
+> **并发安全**：CLI 与 Web 共享同一份数据文件。CLI 的每个写操作（添加/解决/删除/编辑/恢复）都在 `data_lock()` 内基于**磁盘最新数据**重做，避免覆盖 Web 端刚写入的内容；读操作（查看/搜索/筛选/分类/导出）先调用 `_refresh(questions)` 从磁盘重载，保证看到 Web 端的最新改动。
+
+#### `_refresh(questions)`
+
+读操作前刷新内存快照：`questions.clear()` 后 `extend(load_questions())`，从磁盘重新加载，反映 Web 端最新改动。原子写入保证读到的文件永远是完整的，因此读无需加锁。
 
 #### `print_questions(questions, header, empty_msg=...)`
 
@@ -235,7 +257,7 @@ def save_questions(questions):
 
 #### `add_question(questions)`
 
-交互式添加新问题。标题为空或全空格时取消；分类为空时回退 `DEFAULT_CATEGORY`。构造 `Question` 后 `append` 并 `save_questions`。
+交互式添加新问题。标题为空或全空格时取消；分类为空时回退 `DEFAULT_CATEGORY`。输入在锁外完成，锁内重新 `load_questions()` 后追加并 `save_questions`，再同步内存快照。
 
 #### `list_questions(questions)`
 
@@ -295,27 +317,41 @@ questions[:] = [q for q in questions if q.id != q_id]
 
 ### 5.3 web_app.py（Web 界面层）
 
-#### 应用初始化
+#### 安全配置（启动时）
 
 ```python
 app = Flask(__name__)
 app.json.ensure_ascii = False  # 中文原样输出，不做 \uXXXX 转义
-
-_write_lock = threading.Lock()  # 写操作锁，见下方说明
 ```
 
-**写操作锁**：Flask 开发服务器默认多线程，而数据操作是"读-改-写"三段式（`load_questions() → 修改 → save_questions()`）。若无锁，两个并发写请求会各自读到旧列表并互相覆盖（丢数据）。因此 `api_add` / `api_update` / `api_delete` / `api_backup` / `api_restore` 均以 `with _write_lock:` 串行化整段操作。
+- **会话密钥**：优先取环境变量 `QUESTION_NOTEBOOK_SECRET`；否则首次运行生成随机密钥并持久化到 `.flask_secret`（重启后登录会话仍有效）。
+- **密码认证**：`QUESTION_NOTEBOOK_PASSWORD` 环境变量设置后启用（`AUTH_ENABLED=True`）。密码不存明文，用 `hashlib.pbkdf2_hmac("sha256", password, salt, 100_000)` 生成哈希，盐持久化到 `.auth_salt`。
+- **CSRF**：会话级 token（`secrets.token_urlsafe(32)`），通过 `X-CSRF-Token` 请求头校验。
 
-**`_get_json_body()`**：封装 `request.get_json(force=True, silent=True)`，请求体为空或非 JSON 时返回 `None`，由调用方返回 `400 {"error": "请求体必须是 JSON"}`，避免框架抛出 500。
+**`_password_verify(password)`**：用 PBKDF2 重算哈希并与存储哈希 `hmac.compare_digest` 比较，防时序攻击。未启用认证时直接返回 `True`。
+
+**`_require_auth(view_func)`**：装饰器，认证开启且 `session` 未登录时返回 `401 {"error": "未登录"}`。
+
+**`_ensure_csrf_token()`**：获取当前会话的 CSRF token，不存在则生成并写入 `session`。
+
+**`_csrf_protection()`**：`@app.before_request` 钩子，对所有非 `GET/HEAD/OPTIONS` 请求校验 `X-CSRF-Token`（与 session 中 token 做 `hmac.compare_digest`），不匹配返回 `403`；`POST /api/login` 豁免（登录前无 session）。
+
+**`_get_json_body()`**：封装 `request.get_json(force=True, silent=True)`，且**仅接受 dict**（数组/字符串等非对象返回 `None`），由调用方返回 `400`，避免框架抛出 500 或 `.get()` 崩溃。
+
+**写操作锁**：由数据层跨进程文件锁 `data_lock()` 提供（不再是进程内 `threading.Lock`）。`api_add` / `api_update` / `api_delete` / `api_backup` / `api_restore` 均以 `with data_lock():` 串行化整段"读-改-写"。
 
 #### 路由与处理函数
 
 | 路由函数 | 方法与路径 | 说明 |
 |---------|-----------|------|
-| `index()` | `GET /` | 渲染 `templates/index.html` |
-| `api_list()` | `GET /api/questions` | 返回全部问题 |
-| `api_add()` | `POST /api/questions` | 添加问题；`title` 空或请求体非 JSON 返回 400 |
-| `api_update(qid)` | `PUT /api/questions/<int:qid>` | 部分更新（含标记解决），不存在返回 404 |
+| `index()` | `GET /` | 渲染 `templates/index.html`，注入 csrf_token / auth_enabled / logged_in |
+| `api_auth_status()` | `GET /api/auth-status` | 返回 `{auth_enabled, logged_in}` |
+| `api_csrf()` | `GET /api/csrf` | 下发当前会话的 CSRF token |
+| `api_login()` | `POST /api/login` | 校验密码，写入 `session`，返回新 CSRF token |
+| `api_logout()` | `POST /api/logout` | 清空 `session` |
+| `api_list()` | `GET /api/questions` | 返回全部问题（`@_require_auth`） |
+| `api_add()` | `POST /api/questions` | 添加问题；`title` 空或请求体非对象返回 400 |
+| `api_update(qid)` | `PUT /api/questions/<int:qid>` | 部分更新（含标记解决），`is_solved` 严格布尔校验，不存在返回 404 |
 | `api_delete(qid)` | `DELETE /api/questions/<int:qid>` | 删除问题，不存在返回 404 |
 | `api_export()` | `GET /api/export` | 导出 CSV 附件下载（`build_csv` 生成，含 BOM） |
 | `api_backup()` | `POST /api/backup` | 创建带时间戳备份快照（数据层 `backup_data`） |
@@ -333,12 +369,14 @@ if __name__ == "__main__":
 
 ### 5.4 templates/index.html（前端）
 
-前端为单页应用，内嵌 CSS 与原生 JavaScript，通过 `fetch` 调用后端 API。
+前端为单页应用，内嵌 CSS 与原生 JavaScript，通过 `fetch` 调用后端 API。含登录页，`fetch` 统一封装携带 CSRF 头并处理 401。
 
 #### 全局状态
 
 | 变量 | 说明 |
 |------|------|
+| `AUTH_ENABLED` | 后端注入的认证开关（`"true"/"false"`） |
+| `__csrf_token` | CSRF token（后端模板注入，登录成功后刷新） |
 | `questions` | 从后端拉取的全部问题 |
 | `selectedBackup` | 恢复弹窗中选中的备份文件名 |
 | `editingId` | 正在编辑的问题 ID（`null` 表示新增） |
@@ -349,6 +387,9 @@ if __name__ == "__main__":
 
 | 函数 | 说明 |
 |------|------|
+| `api(url, opts)` | `fetch` 封装：自动带 `X-CSRF-Token` 头，遇 401 跳登录页，处理 CSRF/业务错误 |
+| `showLoginPage()` / `hideLoginPage()` | 登录页显隐 |
+| `doLogin()` / `doLogout()` | 登录（成功后刷新 token）/ 登出 |
 | `esc(s)` | HTML 转义，防 XSS/破坏页面结构 |
 | `toast(msg)` | 底部轻提示 |
 | `openModal(id)` / `closeModal(id)` | 模态框显隐 |
@@ -379,6 +420,7 @@ if __name__ == "__main__":
 | `test_corrupt_json` | 损坏 JSON 备份 `.bak` 后返回空列表 |
 | `test_wrong_top_level_type` | 合法 JSON 但顶层非数组（对象/字符串/数字）按损坏处理 |
 | `test_atomic_save` | 原子写入无 `.tmp` 残留，数据完整 |
+| `test_trailing_newline` | 数据文件末尾换行符行为正确 |
 | `test_backup_name_unique_and_filtered` | 备份文件名含微秒不覆盖；`list_backups` 过滤不合规文件 |
 | `test_restore_rejects_bad_names` | `restore_data` 拒绝路径穿越/前缀不符文件名 |
 | `test_build_csv` | CSV 生成含 BOM 头、表头、数据行 |
@@ -392,6 +434,21 @@ if __name__ == "__main__":
 | `test_backup_restore` | 备份→删除→恢复往返 |
 | `test_view_by_category` | 分类浏览（正常 + 无效编号） |
 | `test_multi_keyword_search` | 多关键词 AND 搜索 |
+| `test_refresh_syncs_from_disk` | `_refresh` 从磁盘同步 Web 端写入的最新数据 |
+
+#### `TestWeb(unittest.TestCase)` — Web 层测试（Flask test_client，含认证与 CSRF）
+
+用 `HAS_FLASK` 标志跳过（未装 Flask 时不影响数据层/CLI 测试）。`setUp` 用 test_client 建立会话并取 CSRF token，通过 `_csrf_json` / `_csrf_put_json` / `_csrf_delete` 辅助方法在请求里带 `X-CSRF-Token` 头。
+
+| 类别 | 用例 | 覆盖点 |
+|------|------|--------|
+| 业务 | `test_crud_flow` | 增删改查全链路 |
+| 业务 | `test_bad_bodies` / `test_empty_title` / `test_is_solved_type_check` / `test_not_found` | 空 body、非法 JSON、空标题、布尔类型校验、404 |
+| 业务 | `test_export_csv` / `test_backup_restore_flow` / `test_restore_rejects_bad_names` / `test_backups_empty` | 导出、备份恢复、文件名白名单 |
+| CSRF | `test_csrf_required_for_post` / `test_csrf_required_for_put_delete` / `test_csrf_wrong_token_rejected` | 缺失/错误 CSRF 头返回 403 |
+| CSRF | `test_login_endpoint_exempt_from_csrf` / `test_csrf_token_issued` | 登录接口 CSRF 豁免、token 发放 |
+| 认证 | `test_auth_disabled_by_default` | 默认免登录 |
+| 认证 | `test_auth_enabled_requires_login` / `test_logout_clears_session` / `test_login_empty_body_is_400` | 登录成功/失败、登出失效、非法 body |
 
 ---
 
@@ -404,9 +461,10 @@ if __name__ == "__main__":
       │  body: {title, description, category}
       ▼
 后端 api_add()   (web_app.py)
-      │  _get_json_body() 解析（空 body → 400）
+      │  CSRF 校验（before_request）→ 认证校验（@_require_auth）
+      │  _get_json_body() 解析（空/非对象 → 400）
       │  校验 title 非空 → 构造 Question
-      │  with _write_lock:  (并发写串行化)
+      │  with data_lock():  (跨进程并发写串行化)
       ▼
 数据层 save_questions() (models.py)
       │  分配 ID → 写临时文件 → os.replace 原子替换
@@ -431,7 +489,7 @@ load_questions()
 ```
 备份：backup_data() → copy2(DATA_FILE → backups/questions_时间戳_微秒.json)
 恢复：list_backups() 列出 → 选择备份 → 二次确认
-     → restore_data() 白名单校验文件名 → copy2(备份 → DATA_FILE) → 重新 load_questions()
+     → restore_data() 白名单校验文件名 → 读取备份内容 → _atomic_write 原子写回 DATA_FILE → 重新 load_questions()
 ```
 
 ---
@@ -477,6 +535,10 @@ load_questions()
 | 方法 | 路径 | 功能 | 请求体 | 成功状态码 |
 |------|------|------|--------|-----------|
 | GET | `/` | 渲染 Web 界面 | - | 200 |
+| GET | `/api/auth-status` | 查询认证状态 | - | 200 |
+| GET | `/api/csrf` | 下发 CSRF Token | - | 200 |
+| POST | `/api/login` | 登录（校验密码） | `{password}` | 200 |
+| POST | `/api/logout` | 登出 | - | 200 |
 | GET | `/api/questions` | 获取全部问题 | - | 200 |
 | POST | `/api/questions` | 添加问题 | `{title, description, category}` | 201 |
 | PUT | `/api/questions/<id>` | 编辑问题（部分更新） | `{title?, description?, category?, is_solved?, solution?}` | 200 |
@@ -488,11 +550,14 @@ load_questions()
 
 **约定与错误处理：**
 
-- 请求体为空或非 JSON → `400 {"error": "请求体必须是 JSON"}`（所有带 body 的接口）
+- 请求体为空或非 JSON 对象 → `400 {"error": "请求体必须是 JSON"}`（所有带 body 的接口）
 - 添加问题 `title` 为空 → `400 {"error": "标题不能为空"}`
+- `is_solved` 非布尔（如字符串 `"false"`）→ `400 {"error": "is_solved 必须是布尔值"}`
 - 编辑/删除不存在的 ID → `404 {"error": "未找到该问题"}`
 - 恢复接口文件名须匹配白名单 `questions_YYYYMMDD_HHMMSS[_微秒].json`（拒绝路径穿越与不合规命名）→ `400`；文件不存在 → `404`
 - 编辑接口只更新请求体中出现的字段（部分更新语义）
+- **CSRF**：除 `GET/HEAD/OPTIONS` 外的请求须带 `X-CSRF-Token` 头（值来自 `/api/csrf` 或页面模板注入），否则 `403 {"error": "CSRF 校验失败"}`；`POST /api/login` 豁免
+- **认证**：启用密码后，未登录访问受保护接口 → `401 {"error": "未登录"}`；登录密码错误 → `401 {"error": "密码错误"}`
 
 ---
 
@@ -512,11 +577,15 @@ load_questions()
 | `json` | JSON 序列化/反序列化 | `models.py` |
 | `os` | 路径与文件系统操作 | 全部 |
 | `re` | 备份文件名白名单正则 | `models.py` |
-| `csv` / `io` | CSV 生成（`build_csv` 内部） | `models.py` |
+| `csv` / `io` | CSV 生成与字节流 | `models.py`、`web_app.py` |
 | `datetime` | 时间戳生成 | `models.py`、`web_app.py` |
-| `shutil` | 文件复制（备份/恢复） | `models.py` |
+| `shutil` | 文件复制（备份） | `models.py` |
 | `tempfile` | 原子写入临时文件 | `models.py` |
-| `threading` | 写操作锁 | `web_app.py` |
+| `contextlib` | `data_lock` 上下文管理器 | `models.py` |
+| `fcntl` / `msvcrt` | 跨进程文件锁（Linux/macOS 用 fcntl，Windows 用 msvcrt） | `models.py` |
+| `hashlib` | PBKDF2 密码哈希 | `web_app.py` |
+| `hmac` | 防时序攻击的常量时间比较 | `web_app.py` |
+| `secrets` | 会话密钥与 CSRF token 生成 | `web_app.py` |
 
 ### 9.2 测试依赖
 
@@ -557,6 +626,18 @@ python web_app.py
 
 启动后浏览器访问 **http://127.0.0.1:5000**。
 
+**启用密码认证（可选）**：局域网/公网部署时设置密码，否则免登录（仅限本机）：
+
+```bash
+# Linux / macOS
+QUESTION_NOTEBOOK_PASSWORD=你的密码 python web_app.py
+
+# Windows (PowerShell)
+$env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python web_app.py
+```
+
+可选环境变量：`QUESTION_NOTEBOOK_SECRET` 指定 Flask 会话签名密钥（不设则自动生成 `.flask_secret` 持久化）。
+
 ### 10.4 运行测试
 
 ```bash
@@ -567,6 +648,7 @@ python test_qn.py
 
 - 数据文件 `questions.json` 不存在时自动创建。
 - 备份目录 `backups/`、导出目录 `exports/` 在相应操作时自动创建。
+- `.flask_secret`（会话密钥）首次运行自动生成；`.auth_salt`（密码盐）启用认证后自动生成。
 
 ---
 
@@ -575,10 +657,10 @@ python test_qn.py
 - **入口**：`python test_qn.py`（`unittest` 默认发现并运行全部用例，`verbosity=2`）。
 - **测试隔离**：`setUp` 将 `models` 与 `cli` 的 `BASE_DIR`/`DATA_FILE`/`BACKUP_DIR`/`EXPORT_DIR` 重定向到临时目录（`tempfile.mkdtemp`），`tearDown` 删除，不会读写真实 `questions.json`。注意 `BASE_DIR` 必须一并重定向——原子写入的临时文件与目标文件须同目录，跨卷 `os.replace` 会失败。
 - **输入模拟**：用 `unittest.mock.patch('builtins.input', side_effect=[...])` 依次提供模拟输入。
-- **覆盖范围**：数据层 9 个用例 + CLI 层 5 个用例，共 **14 个用例**。
+- **覆盖范围**：数据层 10 个用例 + CLI 层 6 个用例 + Web 层 18 个用例（含认证与 CSRF），共 **34 个用例**。
 
 > ⚠️ 测试依赖 `from models import ...` 的值拷贝特性，路径常量必须**双边同步更新**（`models.DATA_FILE = cli.DATA_FILE = ...`），否则会误读写真实数据文件。
 
 ---
 
-> 本文档基于源码 v0.1.0（2026-08-15）生成，如代码结构变更请同步更新。
+> 本文档基于源码 v0.1.2（2026-08-16）生成，如代码结构变更请同步更新。

@@ -57,6 +57,8 @@ CLI 与 Web 两个前端共享同一数据层与数据文件，数据完全互�
 | 数据 | 备份与恢复 | 带时间戳快照备份，覆盖前二次确认 |
 | 数据 | 导出 CSV | UTF-8 BOM 编码，Excel 直接打开无乱码 |
 | 兼容 | 旧数据兼容 | 缺失字段的历史数据自动补默认值，无缝升级 |
+| 安全 | 密码认证 | 可选：设置环境变量后启用登录，密码 PBKDF2 哈希存储 |
+| 安全 | CSRF 防护 | 所有写操作校验 X-CSRF-Token，防止跨站请求伪造 |
 
 ## 架构设计
 
@@ -117,6 +119,23 @@ python web_app.py
 启动后浏览器访问 **http://127.0.0.1:5000**。
 
 首次运行自动创建数据文件 `questions.json`。
+
+### 启用密码认证（可选）
+
+Web 版默认**免登录**（仅适合本机 `127.0.0.1` 使用）。若要在局域网/公网部署，请设置密码：
+
+```bash
+# Linux / macOS
+QUESTION_NOTEBOOK_PASSWORD=你的密码 python web_app.py
+
+# Windows (PowerShell)
+$env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python web_app.py
+```
+
+| 环境变量 | 说明 |
+|---------|------|
+| `QUESTION_NOTEBOOK_PASSWORD` | 登录密码。设置后启用登录页，未设置则免登录 |
+| `QUESTION_NOTEBOOK_SECRET` | 可选，Flask 会话签名密钥；不设置则首次运行自动生成 `.flask_secret` 持久化保存 |
 
 ## 使用指南
 
@@ -193,6 +212,10 @@ Web 版提供 RESTful API，所有接口返回 JSON（中文原样输出，无 `
 | 方法 | 路径 | 功能 | 请求体 |
 |------|------|------|--------|
 | GET | `/` | 渲染 Web 界面 | - |
+| GET | `/api/auth-status` | 查询认证状态（是否启用、是否已登录） | - |
+| GET | `/api/csrf` | 下发 CSRF Token | - |
+| POST | `/api/login` | 登录（校验密码） | `{password}` |
+| POST | `/api/logout` | 登出 | - |
 | GET | `/api/questions` | 获取全部问题 | - |
 | POST | `/api/questions` | 添加问题 | `{title, description, category}` |
 | PUT | `/api/questions/<id>` | 编辑问题（含标记解决） | `{title?, description?, category?, is_solved?, solution?}` |
@@ -207,10 +230,12 @@ Web 版提供 RESTful API，所有接口返回 JSON（中文原样输出，无 `
 - 编辑接口仅更新请求体中存在的字段（部分更新）
 - 操作不存在的 ID 返回 `404`
 - 恢复接口校验文件名，拒绝路径穿越
+- **CSRF**：除 `GET/HEAD/OPTIONS` 外的所有请求须携带请求头 `X-CSRF-Token`（值来自 `/api/csrf`），否则返回 `403`；`/api/login` 豁免
+- **认证**：启用密码后，未登录访问受保护接口返回 `401`
 
 ## 测试
 
-项目内置自动化测试，覆盖数据层与 CLI 界面层：
+项目内置自动化测试，覆盖数据层、CLI 界面层与 Web 层（含认证与 CSRF）：
 
 ```bash
 python test_qn.py
@@ -219,6 +244,7 @@ python test_qn.py
 **测试覆盖：**
 - 数据层：模型序列化往返、读写循环、原子写入无残留、旧数据兼容、损坏文件容错（含顶层结构异常）、备份文件名唯一性、恢复文件名白名单、CSV 生成
 - CLI 层：完整业务流程（增→改→搜→解决→删）、备份恢复往返、CSV 导出（含 BOM 校验）、分类浏览、多关键词搜索
+- Web 层：增删改查全链路、空 body/非法 JSON、CSRF 缺失/错误拒绝、登录成功/失败、登出失效、免登录默认态
 
 ## 项目结构
 
@@ -230,10 +256,13 @@ question_notebook/
 ├── templates/
 │   └── index.html         # Web 前端页面
 ├── questions.json         # 数据文件（首次运行自动生成）
+├── .flask_secret          # Flask 会话签名密钥（首次运行自动生成）
+├── .auth_salt             # 密码哈希盐（启用认证后首次运行自动生成）
 ├── backups/               # 备份目录（备份时自动创建）
 ├── exports/               # CSV 导出目录（导出时自动创建）
 ├── ROADMAP.md             # 路线图（版本规划与演进方向）
 ├── TUTORIAL.md            # 教学文档（代码讲解 + 动手练习）
+├── CODE_WIKI.md           # 代码级知识库（模块职责 + 关键函数）
 └── README.md              # 项目文档
 ```
 
@@ -250,6 +279,21 @@ question_notebook/
 | v1.0.0 | 关联与发布（平台化） | 📋 规划中 |
 
 ## 更新日志
+
+### 2026-08-16 · v0.1.2 Web 安全加固
+
+**认证与 CSRF**
+- 新增可选密码认证：设置 `QUESTION_NOTEBOOK_PASSWORD` 环境变量即启用登录，密码 PBKDF2 哈希存储、防时序攻击
+- 新增 CSRF 防护：所有写请求须携带 `X-CSRF-Token` 头，防止跨站请求伪造
+- 新增 `/api/csrf`、`/api/login`、`/api/logout`、`/api/auth-status` 四个接口
+- Flask 会话密钥支持环境变量注入，否则持久化到 `.flask_secret`
+
+**并发与数据一致性**
+- 写锁由进程内 `threading.Lock` 升级为跨进程文件锁 `data_lock`（CLI 与 Web 并发写安全）
+- CLI 每次读操作前从磁盘刷新内存快照，与 Web 端数据实时互通
+
+**测试**
+- 测试覆盖扩展至 Web 层（认证 + CSRF + 全链路），用例数增至 34 个
 
 ### 2026-08-15 · v0.1.1 稳定性与安全修复
 
