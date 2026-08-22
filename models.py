@@ -284,6 +284,83 @@ def build_csv(questions):
     return '\ufeff' + output.getvalue()
 
 
+# ---------- 统计聚合 ----------
+
+def get_stats():
+    """返回数据可视化用的聚合统计（分类分布 + 解决率 + 按月趋势）。
+
+    所有统计都用 SQL 聚合一次性算出，避免在 Python 里遍历。
+    返回字典：
+        {
+          "total": int,
+          "solved": int,
+          "open": int,
+          "solve_rate": float,              # 0.0 ~ 1.0，total=0 时为 0
+          "by_category": [                  # 按数量降序
+            {"category": str, "total": int, "solved": int, "open": int}, ...
+          ],
+          "by_month": [                     # 按时间升序，格式 YYYY-MM
+            {"month": str, "total": int, "solved": int}, ...
+          ]
+        }
+    数据库不存在或损坏时返回零值结构（不抛异常）。
+    """
+    empty = {
+        "total": 0, "solved": 0, "open": 0, "solve_rate": 0.0,
+        "by_category": [], "by_month": [],
+    }
+    if not os.path.exists(DATA_FILE):
+        return empty
+    try:
+        conn = _connect()
+    except sqlite3.DatabaseError:
+        return empty
+    try:
+        _ensure_schema(conn)
+        total = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
+        if total == 0:
+            return empty
+        solved = conn.execute(
+            "SELECT COUNT(*) FROM questions WHERE is_solved = 1"
+        ).fetchone()[0]
+        # 分类分布：一次 GROUP BY 同时拿到每类的总数与已解决数
+        by_category = [
+            {
+                "category": r["category"],
+                "total": r["total"],
+                "solved": r["solved"],
+                "open": r["total"] - r["solved"],
+            }
+            for r in conn.execute(
+                "SELECT category, COUNT(*) AS total, "
+                "SUM(is_solved) AS solved "
+                "FROM questions GROUP BY category "
+                "ORDER BY total DESC, category"
+            )
+        ]
+        # 按月趋势：timestamp 形如 "YYYY-MM-DD HH:MM:SS"，取前 7 位得 "YYYY-MM"
+        by_month = [
+            {"month": r["month"], "total": r["total"], "solved": r["solved"]}
+            for r in conn.execute(
+                "SELECT substr(timestamp, 1, 7) AS month, "
+                "COUNT(*) AS total, SUM(is_solved) AS solved "
+                "FROM questions GROUP BY month ORDER BY month"
+            )
+        ]
+        return {
+            "total": total,
+            "solved": solved,
+            "open": total - solved,
+            "solve_rate": solved / total,
+            "by_category": by_category,
+            "by_month": by_month,
+        }
+    except sqlite3.DatabaseError:
+        return empty
+    finally:
+        conn.close()
+
+
 # ---------- 跨进程锁 ----------
 
 @contextlib.contextmanager

@@ -107,6 +107,66 @@
     gap: 16px;
     padding: 16px 24px 40px;
   }
+
+  /* ========== 数据可视化面板 ========== */
+  .charts-panel {
+    margin: 8px 24px 0;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .charts-toggle {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: #e2e8f0;
+    font-size: 14px;
+    padding: 12px 16px;
+    text-align: left;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .charts-toggle:hover { background: #273345; }
+  .charts-arrow {
+    display: inline-block; transition: transform 0.2s;
+    font-size: 11px; color: #38bdf8;
+  }
+  .charts-arrow.open { transform: rotate(90deg); }
+  .charts-hint {
+    margin-left: auto; font-size: 12px; color: #64748b;
+  }
+  .charts-body {
+    display: flex; flex-wrap: wrap; gap: 20px;
+    padding: 8px 16px 18px;
+    border-top: 1px solid #334155;
+  }
+  .chart-card {
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    padding: 14px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    flex: 1 1 auto;
+    min-width: 280px;
+    position: relative;
+  }
+  .chart-title {
+    font-size: 13px; color: #94a3b8; align-self: flex-start;
+  }
+  .chart-card canvas { max-width: 100%; height: auto; }
+  .chart-legend {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 12px;
+    font-size: 12px; color: #cbd5e1;
+  }
+  .chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .chart-legend i {
+    width: 10px; height: 10px; border-radius: 2px; display: inline-block;
+  }
+  .chart-empty {
+    font-size: 13px; color: #64748b; padding: 40px 0;
+  }
+
   .card {
     background: #1e293b;
     border: 1px solid #334155;
@@ -242,6 +302,28 @@
 
 <!-- ===== 统计条 ===== -->
 <div class="stats" id="stats"></div>
+
+<!-- ===== 数据可视化面板（可折叠） ===== -->
+<div class="charts-panel">
+  <button class="charts-toggle" id="chartsToggle" onclick="toggleCharts()">
+    <span class="charts-arrow" id="chartsArrow">▶</span>
+    <span>数据可视化</span>
+    <span class="charts-hint" id="chartsHint"></span>
+  </button>
+  <div class="charts-body hidden" id="chartsBody">
+    <div class="chart-card">
+      <div class="chart-title">分类分布</div>
+      <canvas id="categoryChart" width="560" height="240"></canvas>
+      <div class="chart-empty hidden" id="categoryEmpty">暂无数据</div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">解决率</div>
+      <canvas id="solveChart" width="240" height="240"></canvas>
+      <div class="chart-legend" id="solveLegend"></div>
+      <div class="chart-empty hidden" id="solveEmpty">暂无数据</div>
+    </div>
+  </div>
+</div>
 
 <!-- ===== 卡片列表 ===== -->
 <div class="grid" id="grid"></div>
@@ -438,6 +520,7 @@ async function load() {
     questions = await res.json();
     renderFilters();
     render();
+    loadStats();   // 顺便刷新数据可视化（图表仅在面板展开时绘制）
   } catch (err) {
     if (err.message === '未登录') return;  // 已在 api() 里跳转
     toast('❌ 加载失败，请确认服务已启动');
@@ -514,6 +597,194 @@ function render() {
 document.getElementById('searchInput').addEventListener('input', render);
 document.getElementById('statusFilter').addEventListener('change', render);
 document.getElementById('categoryFilter').addEventListener('change', render);
+
+// ========== 数据可视化 ==========
+let chartsOpen = false;       // 图表面板是否展开
+let lastStats = null;         // 最近一次拉取的统计数据（展开时复用绘制）
+
+async function toggleCharts() {
+  chartsOpen = !chartsOpen;
+  const body = document.getElementById('chartsBody');
+  const arrow = document.getElementById('chartsArrow');
+  if (chartsOpen) {
+    body.classList.remove('hidden');
+    arrow.classList.add('open');
+    arrow.textContent = '▶';
+    await loadStats();        // 展开时立即拉取并绘制
+  } else {
+    body.classList.add('hidden');
+    arrow.classList.remove('open');
+  }
+}
+
+async function loadStats() {
+  // 提示文案先更新（无论是否展开，统计条上的提示也跟着变）
+  const hint = document.getElementById('chartsHint');
+  try {
+    const res = await api('/api/stats');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    lastStats = await res.json();
+    hint.textContent = `共 ${lastStats.total} 条 · 已解决 ${lastStats.solved} 条`;
+    if (chartsOpen) drawCharts(lastStats);
+  } catch (err) {
+    if (err.message === '未登录') return;
+    hint.textContent = '统计加载失败';
+    console.error('loadStats() 失败:', err);
+  }
+}
+
+function drawCharts(stats) {
+  drawCategoryChart(stats.by_category || []);
+  drawSolveChart(stats);
+}
+
+// 柱状图：每个分类一根柱，分段显示「已解决 / 未解决」
+function drawCategoryChart(byCategory) {
+  const canvas = document.getElementById('categoryChart');
+  const empty = document.getElementById('categoryEmpty');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!byCategory.length) {
+    canvas.style.display = 'none';
+    empty.classList.remove('hidden');
+    return;
+  }
+  canvas.style.display = '';
+  empty.classList.add('hidden');
+
+  // 布局常量
+  const W = canvas.width, H = canvas.height;
+  const padL = 16, padR = 16, padT = 12, padB = 56;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const n = byCategory.length;
+  const gap = 14;
+  const barW = Math.max(8, Math.min(56, (plotW - gap * (n - 1)) / n));
+  const totalW = barW * n + gap * (n - 1);
+  const startX = padL + (plotW - totalW) / 2;
+
+  const maxVal = Math.max(1, ...byCategory.map(c => c.total));
+  // Y 轴刻度（最多 4 格）
+  ctx.strokeStyle = '#334155';
+  ctx.fillStyle = '#64748b';
+  ctx.font = '11px "Segoe UI", sans-serif';
+  ctx.textAlign = 'right';
+  const ticks = 4;
+  for (let i = 0; i <= ticks; i++) {
+    const y = padT + plotH - (plotH * i / ticks);
+    ctx.beginPath();
+    ctx.moveTo(padL, y); ctx.lineTo(W - padR, y);
+    ctx.globalAlpha = i === 0 ? 0.6 : 0.25;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    const val = Math.round(maxVal * i / ticks);
+    ctx.fillText(String(val), padL + 26, y + 3);
+  }
+
+  // 柱子（下半未解决=橙，上半已解决=绿，堆叠）
+  ctx.textAlign = 'center';
+  byCategory.forEach((c, i) => {
+    const x = startX + i * (barW + gap);
+    const totalH = (c.total / maxVal) * plotH;
+    const solvedH = (c.solved / maxVal) * plotH;
+    const openH = totalH - solvedH;
+    // 未解决段（底部）
+    if (openH > 0) {
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(x, padT + plotH - totalH, barW, openH);
+    }
+    // 已解决段（顶部）
+    if (solvedH > 0) {
+      ctx.fillStyle = '#15803d';
+      ctx.fillRect(x, padT + plotH - totalH, barW, solvedH);
+    }
+    // 顶部数字
+    if (c.total > 0) {
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '11px "Segoe UI", sans-serif';
+      ctx.fillText(String(c.total), x + barW / 2, padT + plotH - totalH - 4);
+    }
+    // X 轴分类标签（过长截断）
+    let label = c.category || '(空)';
+    if (label.length > 6) label = label.slice(0, 5) + '…';
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '11px "Segoe UI", sans-serif';
+    ctx.fillText(label, x + barW / 2, padT + plotH + 16);
+    // 小字：已解决/未解决
+    ctx.fillStyle = '#64748b';
+    ctx.font = '10px "Segoe UI", sans-serif';
+    ctx.fillText(`${c.solved}/${c.open}`, x + barW / 2, padT + plotH + 30);
+  });
+}
+
+// 环形图：解决率（已解决=绿，未解决=橙）
+function drawSolveChart(stats) {
+  const canvas = document.getElementById('solveChart');
+  const empty = document.getElementById('solveEmpty');
+  const legend = document.getElementById('solveLegend');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const total = stats.total || 0;
+  const solved = stats.solved || 0;
+  const open = stats.open || 0;
+
+  if (total === 0) {
+    canvas.style.display = 'none';
+    legend.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  canvas.style.display = '';
+  empty.classList.add('hidden');
+
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2;
+  const R = Math.min(W, H) / 2 - 6;
+  const r = R * 0.62;   // 环宽
+
+  const solvedFrac = solved / total;
+  const start = -Math.PI / 2;   // 12 点方向开始
+
+  // 未解决段（整圈底色）
+  ctx.fillStyle = '#b45309';
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.arc(cx, cy, r, 0, Math.PI * 2, true);
+  ctx.fill();
+
+  // 已解决段（从 start 顺时针扫 solvedFrac）
+  if (solvedFrac > 0) {
+    ctx.fillStyle = '#15803d';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, R, start, start + Math.PI * 2 * solvedFrac);
+    ctx.closePath();
+    ctx.fill();
+    // 挖空内圈
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // 中心文字：百分比
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = 'bold 26px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(Math.round(solvedFrac * 100) + '%', cx, cy - 6);
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '11px "Segoe UI", sans-serif';
+  ctx.fillText('已解决', cx, cy + 14);
+
+  // 图例
+  legend.innerHTML =
+    `<span><i style="background:#15803d"></i>已解决 ${solved}</span>` +
+    `<span><i style="background:#b45309"></i>未解决 ${open}</span>`;
+}
 
 // ========== 添加 / 编辑 ==========
 function openAddModal() {

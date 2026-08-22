@@ -168,6 +168,50 @@ class TestModels(unittest.TestCase):
         self.assertEqual(lines[0].rstrip('\r'), '\ufeff' + "ID,标题,描述,创建时间,是否已解决,解决方案,分类")
         self.assertIn("CSV测试", lines[1])
 
+    def test_get_stats(self):
+        """get_stats：SQL 聚合正确（分类分布 + 解决率 + 按月趋势）"""
+        # 空库返回零值结构
+        empty = models.get_stats()
+        self.assertEqual(empty["total"], 0)
+        self.assertEqual(empty["solve_rate"], 0.0)
+        self.assertEqual(empty["by_category"], [])
+
+        # 构造数据：3 条，分 2 类，2 条已解决
+        q1 = models.Question(title="A", category="Bug")
+        q2 = models.Question(title="B", category="Bug"); q2.is_solved = True; q2.solution = "x"
+        q3 = models.Question(title="C", category="文档"); q3.is_solved = True; q3.solution = "y"
+        models.save_questions([q1, q2, q3])
+
+        s = models.get_stats()
+        self.assertEqual(s["total"], 3)
+        self.assertEqual(s["solved"], 2)
+        self.assertEqual(s["open"], 1)
+        self.assertAlmostEqual(s["solve_rate"], 2 / 3)
+
+        # by_category 按总数降序：Bug(2) 在前，文档(1) 在后
+        self.assertEqual(len(s["by_category"]), 2)
+        bug = s["by_category"][0]
+        self.assertEqual(bug["category"], "Bug")
+        self.assertEqual(bug["total"], 2)
+        self.assertEqual(bug["solved"], 1)
+        self.assertEqual(bug["open"], 1)
+        doc = s["by_category"][1]
+        self.assertEqual(doc["total"], 1)
+        self.assertEqual(doc["solved"], 1)
+
+        # by_month 至少有一条，且 total 之和等于总数
+        self.assertTrue(len(s["by_month"]) >= 1)
+        self.assertEqual(sum(m["total"] for m in s["by_month"]), 3)
+        self.assertEqual(sum(m["solved"] for m in s["by_month"]), 2)
+
+    def test_get_stats_corrupt_db(self):
+        """数据库损坏时 get_stats 返回零值结构，不抛异常"""
+        with open(models.DATA_FILE, 'w', encoding='utf-8') as f:
+            f.write("{不是 sqlite 文件")
+        s = models.get_stats()
+        self.assertEqual(s["total"], 0)
+        self.assertEqual(s["by_category"], [])
+
 
 class TestCLI(unittest.TestCase):
     """CLI 界面层测试"""
@@ -398,6 +442,32 @@ class TestWeb(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn('text/csv', r.content_type)
         self.assertTrue(r.data.startswith(b'\xef\xbb\xbf'))
+
+    def test_stats_endpoint(self):
+        """/api/stats 返回聚合统计，且随数据变化实时更新"""
+        # 空库：返回零值
+        r = self._csrf_get('/api/stats')
+        self.assertEqual(r.status_code, 200)
+        s = r.get_json()
+        self.assertEqual(s["total"], 0)
+        self.assertEqual(s["by_category"], [])
+
+        # 添加 2 条（1 已解决），统计随之变化
+        self._csrf_json('/api/questions', {"title": "Bug1", "category": "Bug"})
+        # 标记其中一条已解决
+        qs = self._csrf_get('/api/questions').get_json()
+        qid = qs[0]["id"]
+        self._csrf_put_json(f'/api/questions/{qid}', {"is_solved": True, "solution": "搞定"})
+        self._csrf_json('/api/questions', {"title": "文档1", "category": "文档"})
+
+        s = self._csrf_get('/api/stats').get_json()
+        self.assertEqual(s["total"], 2)
+        self.assertEqual(s["solved"], 1)
+        self.assertEqual(s["open"], 1)
+        self.assertAlmostEqual(s["solve_rate"], 0.5)
+        # by_category 按总数降序；两类各 1 条，顺序由次排序键 category 决定
+        self.assertEqual(len(s["by_category"]), 2)
+        self.assertEqual({c["category"] for c in s["by_category"]}, {"Bug", "文档"})
 
     def test_backup_restore_flow(self):
         """备份 → 清空 → 恢复 全链路"""

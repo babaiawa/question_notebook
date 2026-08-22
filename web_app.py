@@ -33,6 +33,7 @@ from models import (
     list_backups,
     restore_data,
     data_lock,
+    get_stats,
     DEFAULT_CATEGORY,
 )
 
@@ -293,7 +294,17 @@ def api_delete(qid):
     return jsonify({"ok": True})
 
 
-# ---------- 导出 / 备份 / 恢复 ----------
+# ---------- 导出 / 备份 / 恢复 / 统计 ----------
+
+@app.route('/api/stats')
+@_require_auth
+def api_stats():
+    """数据可视化用的聚合统计（分类分布、解决率、按月趋势）。
+
+    统计由数据层 get_stats() 用 SQL 聚合一次性算出，这里只做转发。
+    """
+    return jsonify(get_stats())
+
 
 @app.route('/api/export')
 @_require_auth
