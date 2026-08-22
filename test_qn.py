@@ -8,11 +8,10 @@ test_qn.py - Question Notebook 自动化测试
 - 数据层（models）：模型序列化往返、读写循环、旧数据兼容、损坏文件容错
 - CLI 层：完整业务流程、备份恢复、CSV 导出、分类浏览、多关键词搜索
 
-安全说明：测试会将数据文件重定向到临时目录，不会读写真实的 questions.json。
+安全说明：测试会将数据文件重定向到临时目录，不会读写真实的 questions.db。
 """
 import os
 import sys
-import json
 import shutil
 import tempfile
 import unittest
@@ -39,7 +38,7 @@ class TestModels(unittest.TestCase):
         # 因此只需改 models 一处，无需再同步 cli/web。
         self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
         models.BASE_DIR = self.tmpdir
-        models.DATA_FILE = os.path.join(self.tmpdir, "questions.json")
+        models.DATA_FILE = os.path.join(self.tmpdir, "questions.db")
         models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
         models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
 
@@ -70,25 +69,34 @@ class TestModels(unittest.TestCase):
         self.assertEqual(loaded[0].title, "A")
         self.assertEqual(loaded[1].category, models.DEFAULT_CATEGORY)
 
-    def test_old_data_compat(self):
-        """缺失 category 字段的历史数据自动补默认值"""
-        old = [{"id": 1, "title": "旧问题", "description": "",
-                "timestamp": "", "is_solved": False, "solution": ""}]
-        with open(models.DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(old, f, ensure_ascii=False)
+    def test_schema_defaults(self):
+        """直接 INSERT 时缺 category：由 schema DEFAULT 补'未分类'"""
+        import sqlite3
+        models.save_questions([models.Question(title="种子")])  # 建库建表
+        conn = sqlite3.connect(models.DATA_FILE)
+        conn.execute(
+            "INSERT INTO questions (id, title, timestamp) VALUES (?, ?, ?)",
+            (99, "无分类行", "2026-08-15 18:00:00"),
+        )
+        conn.commit()
+        conn.close()
         loaded = models.load_questions()
-        self.assertEqual(loaded[0].category, models.DEFAULT_CATEGORY)
+        row = next(q for q in loaded if q.id == 99)
+        self.assertEqual(row.category, models.DEFAULT_CATEGORY)
+        self.assertEqual(row.description, "")   # DEFAULT ''
+        self.assertEqual(row.solution, "")      # DEFAULT ''
+        self.assertFalse(row.is_solved)         # DEFAULT 0
 
-    def test_corrupt_json(self):
-        """损坏的 JSON 文件：备份 .bak 后返回空列表，不崩溃"""
+    def test_corrupt_db(self):
+        """损坏的数据库文件（非 SQLite 格式）：备份 .bak 后返回空列表，不崩溃"""
         with open(models.DATA_FILE, 'w', encoding='utf-8') as f:
             f.write("{损坏的JSON")
         loaded = models.load_questions()
         self.assertEqual(loaded, [])
         self.assertTrue(os.path.exists(models.DATA_FILE + ".bak"))
 
-    def test_wrong_top_level_type(self):
-        """合法 JSON 但顶层不是数组（对象/字符串）：按损坏处理，不崩溃"""
+    def test_non_db_file_treated_as_corrupt(self):
+        """文件存在但不是有效 SQLite 库（JSON 对象/字符串/数字）：按损坏处理，不崩溃"""
         for bad in ('{"a": 1}', '"just a string"', "123"):
             # 每个用例前清掉上次的 .bak
             if os.path.exists(models.DATA_FILE + ".bak"):
@@ -96,7 +104,7 @@ class TestModels(unittest.TestCase):
             with open(models.DATA_FILE, 'w', encoding='utf-8') as f:
                 f.write(bad)
             loaded = models.load_questions()
-            self.assertEqual(loaded, [], f"顶层为 {bad[:20]} 时应返回空列表")
+            self.assertEqual(loaded, [], f"内容为 {bad[:20]} 时应返回空列表")
             self.assertTrue(os.path.exists(models.DATA_FILE + ".bak"))
 
     def test_atomic_save(self):
@@ -109,13 +117,20 @@ class TestModels(unittest.TestCase):
         loaded = models.load_questions()
         self.assertEqual(len(loaded), 1)
 
-    def test_trailing_newline(self):
-        """数据文件末尾有换行（避免 git diff 噪音）"""
-        questions = [models.Question(title="换行测试")]
+    def test_db_file_is_valid_sqlite(self):
+        """保存后数据文件是有效的 SQLite 库（文件头魔数 + 可查表）"""
+        import sqlite3
+        questions = [models.Question(title="格式测试")]
         models.save_questions(questions)
-        with open(models.DATA_FILE, 'r', encoding='utf-8') as f:
-            content = f.read()
-        self.assertTrue(content.endswith('\n'))
+        # SQLite 文件头魔数：前 16 字节 "SQLite format 3\000"
+        with open(models.DATA_FILE, 'rb') as f:
+            header = f.read(16)
+        self.assertTrue(header.startswith(b"SQLite format 3"))
+        # 能正常打开并查询到表与数据
+        conn = sqlite3.connect(models.DATA_FILE)
+        rows = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
+        conn.close()
+        self.assertEqual(rows, 1)
 
     def test_backup_name_unique_and_filtered(self):
         """备份文件名含微秒；list_backups 只认符合规范的文件"""
@@ -160,7 +175,7 @@ class TestCLI(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
         models.BASE_DIR = self.tmpdir
-        models.DATA_FILE = os.path.join(self.tmpdir, "questions.json")
+        models.DATA_FILE = os.path.join(self.tmpdir, "questions.db")
         models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
         models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
 
@@ -278,7 +293,7 @@ class TestWeb(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
         models.BASE_DIR = self.tmpdir
-        models.DATA_FILE = os.path.join(self.tmpdir, "questions.json")
+        models.DATA_FILE = os.path.join(self.tmpdir, "questions.db")
         models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
         models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
         # 测试客户端：复用 cookies/session，确保 CSRF token 与请求同源
