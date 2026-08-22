@@ -47,7 +47,7 @@ question_notebook/
 ├── web_app.py             # Web 界面层（Flask 路由 + 认证 + CSRF）
 ├── test_qn.py             # 自动化测试（数据层 + CLI 层 + Web 层）
 ├── templates/
-│   └── index.html         # Web 前端页面（内嵌 CSS + JS + 登录页）
+│   └── index.html         # Web 前端页面（内嵌 CSS + JS + 登录页 + 数据可视化面板）
 ├── schema.sql             # SQLite 建表脚本（questions 表 + 索引 + schema_meta）
 ├── migrate_to_sqlite.py   # 一次性迁移脚本：questions.json → questions.db
 ├── questions.db           # SQLite 数据文件（首次写入时自动创建并建表）
@@ -142,6 +142,7 @@ web_app.py ───────────────────────
 | `list_backups` | 函数 | CLI、Web、测试 |
 | `restore_data` | 函数 | CLI、Web、测试 |
 | `build_csv` | 函数 | CLI、Web、测试 |
+| `get_stats` | 函数 | Web（统计接口）、测试 |
 | `data_lock` | 上下文管理器 | CLI、Web（写事务加锁） |
 | `DATA_FILE` | 常量 | CLI、Web、测试 |
 | `BACKUP_DIR` | 常量 | CLI、测试 |
@@ -234,6 +235,62 @@ def save_questions(questions):
 | `list_backups()` | 列出全部备份文件名（新的在前），仅认符合 `BACKUP_NAME_PATTERN` 的文件 |
 | `restore_data(filename)` | 从备份恢复：正则白名单校验文件名（拒绝路径穿越与不合规命名），读取备份 `.db` 后经 `tempfile.mkstemp(dir=BASE_DIR, suffix=".tmp")` + `os.replace` 原子替换 `DATA_FILE`，成功返回 `True` |
 | `build_csv(questions)` | 生成 CSV 内容字符串（含 `\ufeff` BOM 头），由调用方负责写文件/下载 |
+| `get_stats()` | **数据可视化聚合统计**：SQL 聚合（非 Python 循环）返回汇总字典，供 Web 端图表渲染（见下） |
+
+#### 函数 `get_stats()`
+
+```python
+def get_stats():
+```
+
+返回聚合统计字典，用于前端数据可视化（分类分布柱状图、解决率环形图、按月趋势）。**全程使用 SQL 聚合**，不在 Python 端遍历：
+
+```sql
+-- 总数
+SELECT COUNT(*) FROM questions
+-- 已解决数
+SELECT COUNT(*) FROM questions WHERE is_solved = 1
+-- 按分类聚合（按 total DESC、category 排序）
+SELECT category, COUNT(*) AS total, SUM(is_solved) AS solved
+FROM questions GROUP BY category ORDER BY total DESC, category
+-- 按月聚合（取 timestamp 前 7 位作月份，按月升序）
+SELECT substr(timestamp, 1, 7) AS month, COUNT(*) AS total, SUM(is_solved) AS solved
+FROM questions GROUP BY month ORDER BY month
+```
+
+返回结构：
+
+```python
+{
+    "total": int,         # 全部问题数
+    "solved": int,        # 已解决数
+    "open": int,          # 未解决数 = total - solved
+    "solve_rate": float,  # 解决率 0.0~1.0，total=0 时为 0.0
+    "by_category": [      # 按 total DESC、category 升序
+        {"category": str, "total": int, "solved": int, "open": int}, ...
+    ],
+    "by_month": [         # 按 month ASC
+        {"month": "YYYY-MM", "total": int, "solved": int}, ...
+    ]
+}
+```
+
+> `SUM(is_solved)` 之所以成立，是因为 `is_solved` 在表中以 `0/1` INTEGER 存储（见 §7）。
+
+**容错逻辑**（与 `load_questions` 同款防御性模式）：
+
+1. `DATA_FILE` 不存在 → 直接返回空结构。
+2. `_connect()` 抛 `sqlite3.DatabaseError` → 捕获并返回空结构，**不崩溃**。
+3. 内层 `try` 中任一 `SELECT` 抛 `DatabaseError` → 捕获并返回空结构。
+4. `finally` 关闭连接。
+
+空结构（即零值）：
+
+```python
+{"total": 0, "solved": 0, "open": 0, "solve_rate": 0.0, "by_category": [], "by_month": []}
+```
+
+> 函数位于 `build_csv` 之后、`data_lock` 段之前。
 
 #### 连接与建表辅助函数
 
@@ -370,6 +427,9 @@ app.json.ensure_ascii = False  # 中文原样输出，不做 \uXXXX 转义
 | `api_backup()` | `POST /api/backup` | 创建带时间戳备份快照（数据层 `backup_data`） |
 | `api_backups()` | `GET /api/backups` | 列出备份文件（数据层 `list_backups`） |
 | `api_restore()` | `POST /api/restore` | 从备份恢复（数据层 `restore_data`，文件名白名单校验） |
+| `api_stats()` | `GET /api/stats` | 聚合统计（分类分布、解决率、按月趋势）；`return jsonify(get_stats())`（`@_require_auth`） |
+
+> 上述导出/备份/恢复/统计相关函数集中在 `web_app.py` 的 `# ---------- 导出 / 备份 / 恢复 / 统计 ----------` 段落下（v0.2.1 起段落注释新增"统计"）。`get_stats` 已加入 `from models import (...)` 块。
 
 #### 入口
 
@@ -406,16 +466,46 @@ if __name__ == "__main__":
 | `esc(s)` | HTML 转义，防 XSS/破坏页面结构 |
 | `toast(msg)` | 底部轻提示 |
 | `openModal(id)` / `closeModal(id)` | 模态框显隐 |
-| `load()` | 拉取 `/api/questions` 并渲染 |
+| `load()` | 拉取 `/api/questions` 并渲染；末尾还会调用 `loadStats()` 刷新统计图表 |
 | `renderFilters()` | 动态生成分类下拉（去重） |
 | `currentFilter()` | 读取搜索词 + 状态 + 分类筛选条件 |
 | `render()` | 核心渲染：过滤 + 统计条 + 卡片列表 |
+| `toggleCharts()` | 切换图表面板显隐（`chartsOpen` 标志 + panel 可见性，展开时触发 `loadStats()`） |
+| `loadStats()` | 拉取 `/api/stats`，更新提示文案，面板打开时绘制图表 |
+| `drawCharts(stats)` / `drawCategoryChart(byCategory)` / `drawSolveChart(stats)` | 在 `#categoryChart` / `#solveChart` 上原生 Canvas 绘图 |
 | `openAddModal()` / `openEditModal(id)` / `saveEdit()` | 添加/编辑流程 |
 | `openSolveModal(id)` / `saveSolve()` | 标记解决流程 |
 | `openDeleteModal(id)` / `confirmDelete()` | 删除流程 |
 | `exportCsv()` / `doBackup()` / `openRestoreModal()` / `pickBackup()` / `confirmRestore()` | 导出/备份/恢复流程 |
 
 **过滤逻辑（`render`）：** 状态筛选 + 分类筛选 + 多关键词（空格分隔，全部命中 AND），三条件叠加。
+
+#### 数据可视化面板（v0.2.1）
+
+位于统计条与卡片列表之间的可折叠面板（容器 `class="charts-panel"`），由 `#chartsToggle` 按钮调用 `toggleCharts()` 控制显隐。展开时才触发 `loadStats()` 拉取数据，避免页面初始化时的额外开销。
+
+| 元素 | 类型 | 说明 |
+|------|------|------|
+| `#chartsToggle` | button | 折叠/展开面板，调用 `toggleCharts()` |
+| `#categoryChart` | canvas | 分类分布柱状图：按分类堆叠，绿色 `#15803d` 表示已解决（顶部），橙色 `#b45309` 表示未解决（底部），带 Y 轴网格线、柱顶计数标签、x 轴分类名（超 6 字截断）与「已解决/未解决」子标签 |
+| `#solveChart` | canvas | 解决率环形图：橙色整环 = 未解决，绿色弧 = 已解决，圆心显示百分比与「已解决」文字，下方图例 |
+
+数据流：
+
+```
+load() (render 之后) → loadStats()
+      │  fetch GET /api/stats
+      ▼
+get_stats() (models.py, SQL 聚合) → JSON
+      │  若 chartsOpen 则绘制
+      ▼
+drawCharts(stats) → drawCategoryChart(byCategory) + drawSolveChart(stats)
+      │  原生 Canvas API（fillRect / arc / fillText 等）
+      ▼
+#categoryChart / #solveChart 重绘
+```
+
+> **零第三方依赖**：图表完全用原生 Canvas API 绘制，无 Chart.js / ECharts 等库，延续项目"无前端框架"的纯原生原则。配色与现有徽标一致：已解决 `#15803d`、未解决 `#b45309`。`load()` 在 `render()` 之后调用 `loadStats()`，使增删改、备份恢复后图表自动刷新。
 
 ---
 
@@ -437,6 +527,8 @@ if __name__ == "__main__":
 | `test_backup_name_unique_and_filtered` | 备份文件名含微秒不覆盖；`list_backups` 过滤不合规文件 |
 | `test_restore_rejects_bad_names` | `restore_data` 拒绝路径穿越/前缀不符文件名 |
 | `test_build_csv` | CSV 生成含 BOM 头、表头、数据行 |
+| `test_get_stats` | `get_stats` 空库返回零结构；构造 3 条问题跨 2 个分类（Bug x2 含 1 已解决、文档 x1 已解决），校验 total/solved/open/solve_rate=2/3、by_category 按 total DESC（Bug 在前）排序、by_month 各月之和等于 total |
+| `test_get_stats_corrupt_db` | 写入非 SQLite 内容，校验 `get_stats` 返回零结构且不抛异常 |
 
 #### `TestCLI(unittest.TestCase)` — CLI 层测试
 
@@ -458,6 +550,7 @@ if __name__ == "__main__":
 | 业务 | `test_crud_flow` | 增删改查全链路 |
 | 业务 | `test_bad_bodies` / `test_empty_title` / `test_is_solved_type_check` / `test_not_found` | 空 body、非法 JSON、空标题、布尔类型校验、404 |
 | 业务 | `test_export_csv` / `test_backup_restore_flow` / `test_restore_rejects_bad_names` / `test_backups_empty` | 导出、备份恢复、文件名白名单 |
+| 业务 | `test_stats_endpoint` | `GET /api/stats`：空库返回 `total=0`；新增 2 条问题（经 `PUT` 标记 1 条 `is_solved:true`）后校验 `total=2, solved=1, open=1, solve_rate=0.5`，`by_category` 含 `{Bug, 文档}` 2 项 |
 | CSRF | `test_csrf_required_for_post` / `test_csrf_required_for_put_delete` / `test_csrf_wrong_token_rejected` | 缺失/错误 CSRF 头返回 403 |
 | CSRF | `test_login_endpoint_exempt_from_csrf` / `test_csrf_token_issued` | 登录接口 CSRF 豁免、token 发放 |
 | 认证 | `test_auth_disabled_by_default` | 默认免登录 |
@@ -517,6 +610,27 @@ load_questions()
      → tempfile.mkstemp + os.replace 原子替换 DATA_FILE → 重新 load_questions()
 ```
 
+### 6.4 统计与可视化流程（v0.2.1）
+
+```
+前端展开图表 → toggleCharts() → loadStats()
+      │  fetch GET /api/stats  (@_require_auth)
+      ▼
+后端 api_stats() (web_app.py)
+      │  return jsonify(get_stats())
+      ▼
+数据层 get_stats() (models.py)
+      │  服务端 SQL 聚合（COUNT / SUM / GROUP BY / substr），
+      │  不在 Python 端遍历，返回 {total, solved, open, solve_rate, by_category, by_month}
+      ▼
+前端 drawCharts(stats) → drawCategoryChart + drawSolveChart
+      │  原生 Canvas 绘制（零第三方库），配色与徽标一致
+      ▼
+#categoryChart / #solveChart 重绘
+```
+
+> 统计完全在**服务端**用 SQL 聚合算出（不传全量问题列表到前端再循环），**客户端**仅负责 Canvas 渲染。增删改、备份恢复后 `load()` 会自动调用 `loadStats()` 刷新图表。
+
 ---
 
 ## 7. 数据存储格式
@@ -575,6 +689,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_timestamp ON questions(timestamp);
 | POST | `/api/backup` | 创建备份快照 | - | 200 |
 | GET | `/api/backups` | 列出备份文件 | - | 200 |
 | POST | `/api/restore` | 从备份恢复 | `{filename}` | 200 |
+| GET | `/api/stats` | 聚合统计（分类分布、解决率、按月趋势） | - | 200 |
 
 **约定与错误处理：**
 
@@ -602,7 +717,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_timestamp ON questions(timestamp);
 
 | 模块 | 用途 | 所属模块 |
 |------|------|---------|
-| `sqlite3` | SQLite 数据库连接与事务 | `models.py` |
+| `sqlite3` | SQLite 数据库连接与事务；`get_stats` 额外使用 SQL 聚合（`GROUP BY`、`SUM`、`substr`），均为 SQLite 内建函数，无新增依赖 | `models.py` |
 | `os` | 路径与文件系统操作 | 全部 |
 | `re` | 备份文件名白名单正则 | `models.py` |
 | `csv` / `io` | CSV 生成与字节流 | `models.py`、`web_app.py` |
@@ -685,10 +800,10 @@ python test_qn.py
 - **入口**：`python test_qn.py`（`unittest` 默认发现并运行全部用例，`verbosity=2`）。
 - **测试隔离**：`setUp` 将 `models` 与 `cli` 的 `BASE_DIR`/`DATA_FILE`/`BACKUP_DIR`/`EXPORT_DIR` 重定向到临时目录（`tempfile.mkdtemp`，其中 `models.DATA_FILE = os.path.join(tmpdir, "questions.db")`），`tearDown` 删除，不会读写真实 `questions.db`。`BASE_DIR` 必须一并重定向——恢复路径中 `tempfile.mkstemp(dir=BASE_DIR)` 生成的临时文件须与目标同目录，跨卷 `os.replace` 会失败。
 - **输入模拟**：用 `unittest.mock.patch('builtins.input', side_effect=[...])` 依次提供模拟输入。
-- **覆盖范围**：数据层 10 个用例 + CLI 层 6 个用例 + Web 层 18 个用例（含认证与 CSRF），共 **34 个用例**。
+- **覆盖范围**：数据层 12 个用例（含 `get_stats` 相关 2 例） + CLI 层 6 个用例 + Web 层 19 个用例（含 `test_stats_endpoint`，含认证与 CSRF），共 **37 个用例**。
 
 > ⚠️ 测试依赖 `from models import ...` 的值拷贝特性，路径常量必须**双边同步更新**（`models.DATA_FILE = cli.DATA_FILE = ...`），否则会误读写真实数据文件。
 
 ---
 
-> 本文档基于源码 v0.2.0（2026-08-16）生成，如代码结构变更请同步更新。
+> 本文档基于源码 v0.2.1（2026-08-22）生成，如代码结构变更请同步更新。

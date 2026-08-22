@@ -56,6 +56,7 @@ CLI 与 Web 两个前端共享同一数据层与数据库文件，数据完全�
 | 数据 | 自动持久化 | 数据实时写入本地 SQLite 数据库 |
 | 数据 | 备份与恢复 | 带时间戳快照备份（.db 副本），覆盖前二次确认 |
 | 数据 | 导出 CSV | UTF-8 BOM 编码，Excel 直接打开无乱码 |
+| 数据 | 数据可视化 | 分类分布柱状图 + 解决率环形图，原生 Canvas 绘制，零第三方依赖 |
 | 兼容 | 迁移工具 | 提供 `migrate_to_sqlite.py`，将历史 `questions.json` 一键迁入 SQLite |
 | 安全 | 密码认证 | 可选：设置环境变量后启用登录，密码 PBKDF2 哈希存储 |
 | 安全 | CSRF 防护 | 所有写操作校验 X-CSRF-Token，防止跨站请求伪造 |
@@ -178,6 +179,7 @@ $env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python web_app.py
 - **组合筛选**：状态筛选与分类筛选可叠加
 - **弹窗操作**：添加/编辑/标记解决/删除确认/备份恢复均为模态框交互
 - **导出下载**：CSV 文件由浏览器直接下载
+- **数据可视化**：可折叠面板，展开即绘制分类分布柱状图（已解决/未解决分段堆叠）与解决率环形图，随数据变化实时刷新
 
 ### 备份与恢复
 
@@ -232,6 +234,7 @@ Web 版提供 RESTful API，所有接口返回 JSON（中文原样输出，无 `
 | POST | `/api/questions` | 添加问题 | `{title, description, category}` |
 | PUT | `/api/questions/<id>` | 编辑问题（含标记解决） | `{title?, description?, category?, is_solved?, solution?}` |
 | DELETE | `/api/questions/<id>` | 删除问题 | - |
+| GET | `/api/stats` | 聚合统计（分类分布、解决率、按月趋势） | - |
 | GET | `/api/export` | 导出 CSV（附件下载） | - |
 | POST | `/api/backup` | 创建备份快照 | - |
 | GET | `/api/backups` | 列出备份文件 | - |
@@ -245,6 +248,30 @@ Web 版提供 RESTful API，所有接口返回 JSON（中文原样输出，无 `
 - **CSRF**：除 `GET/HEAD/OPTIONS` 外的所有请求须携带请求头 `X-CSRF-Token`（值来自 `/api/csrf`），否则返回 `403`；`/api/login` 豁免
 - **认证**：启用密码后，未登录访问受保护接口返回 `401`
 
+### `/api/stats` 响应示例
+
+```json
+{
+  "total": 4,
+  "solved": 2,
+  "open": 2,
+  "solve_rate": 0.5,
+  "by_category": [
+    { "category": "未分类", "total": 3, "solved": 2, "open": 1 },
+    { "category": "数据库", "total": 1, "solved": 0, "open": 1 }
+  ],
+  "by_month": [
+    { "month": "2026-07", "total": 3, "solved": 2 },
+    { "month": "2026-08", "total": 1, "solved": 0 }
+  ]
+}
+```
+
+- `solve_rate`：`0.0 ~ 1.0`，`total=0` 时为 `0`
+- `by_category`：按 `total` 降序排列，供柱状图使用
+- `by_month`：按时间升序（`YYYY-MM`），供趋势图使用
+- 数据库不存在或损坏时返回零值结构（`total=0`、数组为空），不抛异常
+
 ## 测试
 
 项目内置自动化测试，覆盖数据层、CLI 界面层与 Web 层（含认证与 CSRF）：
@@ -254,9 +281,9 @@ python test_qn.py
 ```
 
 **测试覆盖：**
-- 数据层：模型序列化往返、读写循环、schema 默认值、损坏数据库容错（含非 SQLite 文件）、备份文件名唯一性、恢复文件名白名单、CSV 生成
+- 数据层：模型序列化往返、读写循环、schema 默认值、损坏数据库容错（含非 SQLite 文件）、备份文件名唯一性、恢复文件名白名单、CSV 生成、统计聚合（分类分布/解决率/按月趋势，含损坏库容错）
 - CLI 层：完整业务流程（增→改→搜→解决→删）、备份恢复往返、CSV 导出（含 BOM 校验）、分类浏览、多关键词搜索
-- Web 层：增删改查全链路、空 body/非法 JSON、CSRF 缺失/错误拒绝、登录成功/失败、登出失效、免登录默认态
+- Web 层：增删改查全链路、空 body/非法 JSON、CSRF 缺失/错误拒绝、登录成功/失败、登出失效、免登录默认态、`/api/stats` 随数据变化实时更新
 
 ## 项目结构
 
@@ -293,6 +320,21 @@ question_notebook/
 | v1.0.0 | 关联与发布（平台化） | 📋 规划中 |
 
 ## 更新日志
+
+### 2026-08-22 · v0.2.1 数据可视化
+
+**统计聚合**
+- 数据层新增 `get_stats()`：用 SQL 聚合一次性算出分类分布（`GROUP BY category`）、解决率、按月趋势（`substr(timestamp,1,7)`），数据库损坏时返回零值结构不抛异常
+- Web 层新增 `GET /api/stats` 接口（带认证）
+
+**数据可视化（Web 前端）**
+- 新增可折叠的「数据可视化」面板，展开即拉取 `/api/stats` 并绘制
+- 分类分布柱状图：每类一根柱，已解决（绿）/未解决（橙）分段堆叠，顶部标总数、下方标 `已解决/未解决`
+- 解决率环形图：圆心显示百分比，下方图例标数量
+- 全部用原生 Canvas 绘制，零第三方依赖，随数据增删改实时刷新
+
+**测试**
+- 新增 3 个用例：`get_stats` 单元测试（聚合正确性）、损坏库容错、`/api/stats` 端点随数据变化实时更新
 
 ### 2026-08-22 · v0.2.0 数据升级（SQLite 迁移）
 

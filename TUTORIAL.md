@@ -502,6 +502,49 @@ async function api(url, opts = {}) {
 
 登录成功后，后端返回新的 token，前端存进 `__csrf_token`，后续请求继续带。这样前后端配合，把「认证 + CSRF」这套安全机制完整跑通。
 
+### 3.7 数据可视化：SQL 聚合 + Canvas 绘图
+
+v0.2.1 加了「数据可视化」面板——点开后画出分类分布柱状图和解决率环形图。它体现了一个很重要的分工：**统计在数据库算，画图在浏览器画**。
+
+**后端：用 SQL 一次算完，不在 Python 里遍历**
+
+如果用 Python 遍历所有问题再数数，数据量大时会慢。关系型数据库天生擅长聚合，用一条 `GROUP BY` 就行：
+
+```python
+def get_stats():
+    # 分类分布：每类的总数 + 已解决数，一次 GROUP BY 搞定
+    rows = conn.execute(
+        "SELECT category, COUNT(*) AS total, SUM(is_solved) AS solved "
+        "FROM questions GROUP BY category ORDER BY total DESC, category"
+    ).fetchall()
+```
+
+两个细节：
+
+1. **`SUM(is_solved)`**：`is_solved` 存的是 0/1，`SUM` 直接得到已解决数——这是「用整数表示布尔」的妙用。
+2. **`substr(timestamp, 1, 7)`**：从 `"2026-08-22 14:30:00"` 截出 `"2026-08"`，再 `GROUP BY` 就得到按月统计。
+
+后端 `/api/stats` 只是把 `get_stats()` 的结果 `jsonify` 转发，不做任何加工——这叫「薄接口」。
+
+**前端：原生 Canvas 画图，零依赖**
+
+图表用浏览器自带的 `<canvas>` + `getContext('2d')` 画，不引入任何第三方库（ECharts/Chart.js 都不用）。好处是没有依赖、加载快、可控；代价是要自己算坐标。柱状图的核心是算每根柱的位置和高度：
+
+```javascript
+const totalH = (c.total / maxVal) * plotH;   // 柱高 = 占比 × 绘图区高度
+const solvedH = (c.solved / maxVal) * plotH; // 已解决段高度
+ctx.fillStyle = '#15803d';                   // 绿色=已解决（顶部）
+ctx.fillRect(x, bottom - totalH, barW, solvedH);
+ctx.fillStyle = '#b45309';                   // 橙色=未解决（底部）
+ctx.fillRect(x, bottom - totalH + solvedH, barW, totalH - solvedH);
+```
+
+环形图则是画两个圆弧：先画一整圈橙色（未解决），再从 12 点方向扫 `solvedFrac` 比例的绿色弧，最后用 `destination-out` 合成模式挖空内圈变成「环」。
+
+**随数据实时刷新**：`load()` 在增删改之后都会调一次 `loadStats()`，面板展开就重画、折叠就只更新右上角数字——这是「数据驱动视图」的朴素实现。
+
+> 这个分工模式（后端聚合 + 前端渲染）是真实数据看板的标配。理解了它，以后换 ECharts 只是换「画图那一步」，统计逻辑一行都不用改。
+
 ---
 
 ## 第 4 课：架构思想与并发安全
@@ -626,7 +669,7 @@ self.c.post('/api/questions', json={...}, headers={"X-CSRF-Token": self._csrf})
 **进阶级**
 
 3. 把搜索改成 OR 逻辑（任一关键词命中即可）——对比 AND 实现的差异，思考哪种更实用。
-4. 给 Web 版加「按分类统计」接口：`GET /api/stats` 返回每个分类的问题数，前端画成柱状图（提示：直接用 `SELECT category, COUNT(*) ... GROUP BY category` 一条 SQL 搞定，体会关系型数据库的聚合能力）。
+4. 给「数据可视化」面板加第三张图：**按月趋势折线图**——`/api/stats` 已经返回了 `by_month` 数据（每月总数 + 已解决数），用 Canvas 画两条折线（总数线 + 已解决线），体会「数据已就绪，只是换一种画法」。
 5. 把 `save_questions` 的「DELETE 全表 + INSERT 全部」改成「只更新变化的那几行」——体会「全量覆盖」与「增量更新」的取舍（提示：用 `UPDATE`/`DELETE WHERE id=?`/`INSERT`，需要跟踪哪些是新增/修改/删除）。
 
 **挑战级**
@@ -646,7 +689,9 @@ self.c.post('/api/questions', json={...}, headers={"X-CSRF-Token": self._csrf})
   - REST 状态码语义
   - 数据库事务（`BEGIN`/`commit`/`rollback`）与跨进程文件锁
   - 参数化查询防 SQL 注入（`?` 占位符 vs 字符串拼接）
+  - SQL 聚合（`GROUP BY` / `SUM` / `substr`）与「整数表示布尔」的妙用
   - 密码哈希（PBKDF2 + 盐）与防时序攻击（`hmac.compare_digest`）
   - CSRF 攻击原理与 token 防御
+  - 前后端分工：后端聚合 + 前端 Canvas 渲染（数据看板标配）
 
 **记住**：读十遍不如改一遍。项目有 Git 版本控制，`git checkout .` 可以撤销所有改动，放心折腾。
