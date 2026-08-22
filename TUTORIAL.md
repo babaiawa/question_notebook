@@ -61,13 +61,15 @@ $env:QUESTION_NOTEBOOK_PASSWORD="123456"; python web_app.py
 
 ```
 question_notebook/
-├── models.py              # 数据层：数据长什么样、怎么读写文件
+├── models.py              # 数据层：数据长什么样、怎么读写 SQLite
 ├── question_notebook.py   # CLI 界面层：命令行菜单、输入输出
 ├── web_app.py             # Web 界面层：Flask 路由、认证、CSRF
 ├── templates/
 │   └── index.html         # Web 前端页面（HTML + CSS + JS）
 ├── test_qn.py             # 自动化测试
-├── questions.json         # 数据文件（运行后自动生成）
+├── schema.sql             # SQLite 表结构定义（建表/索引）
+├── migrate_to_sqlite.py   # 旧版 JSON → SQLite 一次性迁移脚本
+├── questions.db           # SQLite 数据库（首次运行自动生成）
 └── ...（README / TUTORIAL / ROADMAP / CODE_WIKI 四份文档）
 ```
 
@@ -79,10 +81,10 @@ question_notebook/
 界面层（CLI / Web）  ──调用──▶  数据层（models.py）
 ```
 
-- **数据层**只管「数据是什么、怎么存到文件」，不知道界面长什么样。
-- **界面层**只管「怎么展示、怎么接收输入」，读写文件一律调用数据层。
+- **数据层**只管「数据是什么、怎么存到数据库」，不知道界面长什么样。
+- **界面层**只管「怎么展示、怎么接收输入」，读写数据一律调用数据层。
 
-这样设计的好处：CLI 和 Web 共用同一套数据逻辑，改 bug 只改一处；以后把 JSON 换成数据库，界面层一行都不用改。
+这样设计的好处：CLI 和 Web 共用同一套数据逻辑，改 bug 只改一处；以后把 SQLite 换成 PostgreSQL，界面层一行都不用改。
 
 ---
 
@@ -109,96 +111,120 @@ class Question:
 
 **为什么用类而不是字典？** 类把「数据」和「操作数据的方法」放在一起，调用方写 `q.title` 而不是 `q["title"]`——前者有代码补全、拼错会直接报错，后者拼错字段名只会得到 `None`，很难排查。
 
-### 1.2 序列化：对象 ↔ 字典
+### 1.2 存储介质：为什么用 SQLite
 
-程序运行时，`Question` 对象存在**内存**里，关掉程序就没了。要长期保存，必须把它转成能写进文件的格式（JSON）。这个「对象 → 可存储格式」的过程叫**序列化**，反过来叫**反序列化**。
+程序运行时，`Question` 对象存在**内存**里，关掉程序就没了。要长期保存，必须把它写到能持久化的介质里。
 
-```python
-def to_dict(self):
-    """对象 → 字典（序列化）"""
-    return {
-        "id": self.id,
-        "title": self.title,
-        # ... 其余字段
-    }
+这个项目用 **SQLite** 数据库存储。SQLite 是一个单文件数据库（`questions.db`），不需要安装单独的数据库服务器，Python 标准库自带 `sqlite3` 模块就能用——对个人工具来说几乎是零成本。
 
-@classmethod
-def from_dict(cls, item):
-    """字典 → 对象（反序列化）"""
-    q = cls(
-        title=item.get('title', ''),
-        category=item.get('category', '未分类'),
-        # ... 其余字段
-    )
-    q.id = item.get('id')
-    q.timestamp = item.get('timestamp', '')
-    return q
+> 小历史：v0.1.x 用的是 JSON 文件存储，v0.2.0 迁到了 SQLite。迁移用的是项目里的 `migrate_to_sqlite.py` 脚本，把旧 `questions.json` 一键导入 `questions.db`。表结构定义在 `schema.sql`。
+
+### 1.3 表结构：数据在数据库里长什么样
+
+在关系型数据库里，数据存在**表**里。表就像一张 Excel 表格：每行是一条记录，每列是一个字段。我们的 `questions` 表有 7 列：
+
+```sql
+CREATE TABLE questions (
+    id          INTEGER PRIMARY KEY,              -- 主键，唯一标识一条问题
+    title       TEXT    NOT NULL,                 -- 标题，必填
+    description TEXT    NOT NULL DEFAULT '',      -- 描述
+    timestamp   TEXT    NOT NULL,                 -- 创建时间
+    is_solved   INTEGER NOT NULL DEFAULT 0        -- 0=未解决, 1=已解决
+                CHECK (is_solved IN (0, 1)),
+    solution    TEXT    NOT NULL DEFAULT '',      -- 解决方案
+    category    TEXT    NOT NULL DEFAULT '未分类'  -- 分类
+);
 ```
 
-**重点**：`from_dict` 用的是 `item.get('category', '未分类')` 而不是 `item['category']`。
+几个要点：
 
-- `item['category']`：字段不存在会直接抛 `KeyError`。
-- `item.get('category', '未分类')`：字段不存在就返回默认值 `'未分类'`。
+1. **`PRIMARY KEY`**：`id` 列是主键，数据库会自动保证它唯一、不为空，并自动建索引加速按 id 查找。
+2. **`NOT NULL DEFAULT ...`**：插入时如果没给这一列值，就用默认值，且不允许是 `NULL`。这就是「字段缺失自动补默认值」的原理——由数据库的 schema 约束保证，比代码里逐个判断更可靠。
+3. **`CHECK (is_solved IN (0, 1))`**：SQLite 没有真正的布尔类型，用 0/1 表示。`CHECK` 约束防止写入 2、3 这种非法值。
+4. **`to_dict` / `from_dict` 仍然保留**：虽然底层是 SQLite，但 Web 接口要返回 JSON、迁移脚本要读旧 JSON，所以 `Question` 类仍提供字典转换方法，作为「对象 ↔ 字典」的桥梁。
 
-这就是「旧数据兼容」的原理——老版本存的数据缺了 `category` 字段，新程序照样能读，不会崩。这是从真实 bug 里学来的教训。
-
-### 1.3 读文件与异常处理
+### 1.4 读数据库与异常处理
 
 ```python
 def load_questions():
     if not os.path.exists(DATA_FILE):
-        return []                    # 文件不存在：返回空列表
+        return []                    # 数据库文件不存在：返回空列表
     try:
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if not isinstance(data, list):       # 顶层必须是数组
-            raise ValueError("数据文件顶层结构不是数组")
-        return [Question.from_dict(item) for item in data]
-    except (json.JSONDecodeError, ValueError, AttributeError):
-        # 文件损坏：备份为 .bak 后返回空列表，而不是崩溃
-        ...
+        conn = _connect()            # 打开数据库连接
+    except sqlite3.DatabaseError:
+        return _handle_corrupt_db()  # 文件不是有效 SQLite 库 → 备份 .bak 后返回 []
+    try:
+        _ensure_schema(conn)         # 建表建索引（IF NOT EXISTS，幂等）
+        rows = conn.execute(
+            "SELECT id, title, description, timestamp, is_solved, solution, category "
+            "FROM questions ORDER BY id"
+        ).fetchall()
+        return [_row_to_question(r) for r in rows]
+    except sqlite3.DatabaseError:
+        return _handle_corrupt_db()  # 查询失败（库损坏）→ 同样备份后返回 []
+    finally:
+        conn.close()                 # 用完一定关连接
 ```
 
 三个要点：
 
-1. **`with open(...)` 自动关文件**——忘记关文件是新手最常见的 bug。
-2. **`encoding='utf-8'` 必须显式写**——Windows 默认 GBK 编码，读 UTF-8 中文会乱码（这个项目的第一个真实 bug）。
-3. **捕获异常而不是崩溃**——数据文件被手改坏时，程序把它备份成 `.bak` 然后重建，而不是甩一堆 traceback 给用户。
+1. **`conn.close()` 放在 `finally`**——数据库连接是稀缺资源，忘记关会泄漏。`finally` 块无论是否出错都会执行。
+2. **`_ensure_schema` 幂等建表**——用 `CREATE TABLE IF NOT EXISTS`，第一次运行时建表，之后再调用也不会报错或重建。这样代码不用判断「表存在没有」。
+3. **捕获异常而不是崩溃**——如果 `questions.db` 被人手改成乱码（不是有效 SQLite 格式），程序把它备份成 `.bak` 然后从空状态重建，而不是甩一堆 traceback 给用户。`_row_to_question` 还会把 `is_solved` 从 0/1 还原成 Python 的 `bool`。
 
-### 1.4 原子写入：为什么不能直接写文件
+### 1.5 写数据库：为什么用事务
 
-如果 `save_questions` 直接 `open(DATA_FILE, 'w')` 然后写入，会出现一个隐患：写入到一半程序崩溃或断电，`questions.json` 就成了「半个 JSON」——下次加载直接损坏。
-
-解决办法是**原子写入**（`_atomic_write`）：
+如果写数据时程序崩溃，可能出现「删了旧数据但新数据没写进去」的中间状态。解决办法是**事务**（transaction）：把「删除全部 + 插入全部」打包成一个不可分割的操作，要么全成功、要么全不变。
 
 ```python
-def _atomic_write(content):
-    # 1. 先写到一个同目录的临时文件
-    fd, tmp_path = tempfile.mkstemp(dir=BASE_DIR, suffix=".tmp")
-    with os.fdopen(fd, 'w', encoding='utf-8') as f:
-        f.write(content)
-    # 2. 再用 os.replace 原子地替换目标文件
-    os.replace(tmp_path, DATA_FILE)
+def save_questions(questions):
+    # 先分配 ID（与存储介质无关的逻辑）
+    ...
+    conn = _connect()
+    try:
+        _ensure_schema(conn)
+        conn.execute("BEGIN")                 # 开启事务
+        conn.execute("DELETE FROM questions") # 清空旧数据
+        if questions:
+            conn.executemany(                 # 批量插入新数据
+                "INSERT INTO questions (...) VALUES (?, ?, ...)",
+                [...]
+            )
+        conn.commit()                         # 提交：整个事务生效
+    except Exception:
+        conn.rollback()                       # 出错：回滚，什么都没发生
+        raise
+    finally:
+        conn.close()
 ```
 
-关键在 `os.replace`：它是操作系统级别的**原子操作**，要么完全成功、要么完全不变，不存在「半个文件」的中间状态。即使中途崩溃，留下的也只是临时文件，`questions.json` 始终是完整的（旧的或新的）。
+关键在 `BEGIN` / `commit` / `rollback` 三件套：
 
-> 为什么临时文件要和目标文件放**同一目录**（`dir=BASE_DIR`）？因为 `os.replace` 跨文件系统会失败，同目录保证它们在同一个盘上。
+- `BEGIN`：开始一个事务，之后的 SQL 都在一个「未决」状态。
+- `commit()`：把事务里的改动**真正写入**数据库。
+- `rollback()`：撤销事务里的所有改动，回到 `BEGIN` 之前的状态。
 
-### 1.5 备份、恢复、导出
+如果 `DELETE` 成功了但 `INSERT` 报错，`rollback` 会让 `DELETE` 也失效——数据不会丢。这就是事务的「要么全做、要么全不做」（原子性）。
+
+> **参数化查询防 SQL 注入**：注意 `INSERT ... VALUES (?, ?, ...)` 里的 `?` 占位符，值通过 `executemany` 的第二个参数传入。**永远不要**用字符串拼接（`f"INSERT ... VALUES ({title})"`）构造 SQL——用户输入里如果有单引号就能注入恶意 SQL，`?` 占位符会自动转义。
+
+### 1.6 备份、恢复、导出
 
 这几个功能 CLI 和 Web 都要用，所以统一下沉到数据层：
 
 | 函数 | 作用 |
 |------|------|
-| `backup_data()` | 把当前数据复制到 `backups/` 目录，文件名带微秒时间戳 |
+| `backup_data()` | 把当前 `questions.db` 复制到 `backups/` 目录，文件名带微秒时间戳 |
 | `list_backups()` | 列出所有备份文件（新的在前） |
-| `restore_data(filename)` | 用**正则白名单**校验文件名后，把备份内容原子写回数据文件 |
+| `restore_data(filename)` | 用**正则白名单**校验文件名后，把备份 `.db` 原子替换回数据文件 |
 | `build_csv(questions)` | 生成 CSV 字符串（带 UTF-8 BOM 头，Excel 打开不乱码） |
 
-`restore_data` 有个安全细节：它只接受 `questions_YYYYMMDD_HHMMSS.json` 这种命名，拒绝 `../xxx` 这类路径——这叫**白名单校验**，防止别人用 `../` 穿越目录去读任意文件。
+`restore_data` 有两个安全细节：
 
-### 1.6 跨进程锁：多人同时写怎么办
+1. **白名单校验**：只接受 `questions_YYYYMMDD_HHMMSS_微秒.db` 这种命名，拒绝 `../xxx` 这类路径——防止别人用 `../` 穿越目录去覆盖任意文件。
+2. **原子替换**：恢复时先复制备份到同目录临时文件，再用 `os.replace` 原子替换目标库，避免恢复中途崩溃导致数据库损坏。
+
+### 1.7 跨进程锁：多人同时写怎么办
 
 如果 CLI 和 Web 同时运行，两个进程都执行「读 → 改 → 写」，可能互相覆盖（后写的把先写的盖掉）。单进程内的锁（`threading.Lock`）管不住**跨进程**，所以用文件锁：
 
@@ -230,7 +256,7 @@ with data_lock():
 
 **为什么要锁**：三个步骤必须「原子地」执行，中间不能插进另一个进程的写操作。文件锁让操作系统保证同一时刻只有一个进程能拿到锁，其他进程排队等待。
 
-> 注意锁**不能重入**（同一进程拿两次会死锁），所以锁放在调用方的事务层，`save_questions` 内部不再加锁。
+> 注意锁**不能重入**（同一进程拿两次会死锁），所以锁放在调用方的事务层，`save_questions` 内部不再加锁。SQLite 自己也有锁，这个应用层文件锁先行串行化，能避免直接撞上 SQLite 的 "database is locked" 错误。
 
 ---
 
@@ -492,9 +518,9 @@ async function api(url, opts = {}) {
 
 ### 4.2 三条设计原则
 
-1. **单一职责**：一个模块只做一类事（数据层不管界面，界面层不碰文件）。
+1. **单一职责**：一个模块只做一类事（数据层不管界面，界面层不碰数据库）。
 2. **依赖单向**：界面依赖数据，数据不依赖界面。
-3. **存储隔离**：文件读写集中在 `models.py`，以后换 SQLite/PostgreSQL 界面层零改动。
+3. **存储隔离**：数据库读写集中在 `models.py`，以后换 PostgreSQL 界面层零改动。
 
 ### 4.3 真实踩坑：值拷贝陷阱
 
@@ -509,7 +535,7 @@ from models import DATA_FILE   # 这是「拷贝」了当时的字符串值！
 - 用 `import models` 然后 `models.DATA_FILE`（始终读最新值）。
 - 测试时两个模块的常量一起改（本项目采用，见 `test_qn.py`）。
 
-> **进阶坑**：加了原子写入后，测试隔离还要求 `BASE_DIR` 也要一起重定向——因为临时文件要和目标文件同目录（`os.replace` 跨文件系统会失败）。
+> **进阶坑**：测试隔离还要求 `BASE_DIR` 也要一起重定向——因为 `restore_data` 做原子替换时临时文件要和目标文件同目录（`os.replace` 跨文件系统会失败）。
 
 ### 4.4 并发安全：三个层次的演进
 
@@ -553,15 +579,15 @@ with patch('builtins.input', side_effect=["测试问题", "描述", "编程"]):
 
 ### 5.3 测试隔离：临时目录
 
-测试要写数据文件，直接跑会污染真实 `questions.json`。解法是把路径重定向到临时目录：
+测试要写数据库，直接跑会污染真实 `questions.db`。解法是把路径重定向到临时目录：
 
 ```python
 self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
 models.BASE_DIR = cli.BASE_DIR = self.tmpdir
-models.DATA_FILE = cli.DATA_FILE = os.path.join(self.tmpdir, "questions.json")
+models.DATA_FILE = cli.DATA_FILE = os.path.join(self.tmpdir, "questions.db")
 ```
 
-**注意两边都要改**——这正是第 4 课「值拷贝陷阱」的实战应用。`BASE_DIR` 也要一起改，因为原子写入要求临时文件与目标文件同目录。
+**注意两边都要改**——这正是第 4 课「值拷贝陷阱」的实战应用。`BASE_DIR` 也要一起改，因为 `restore_data` 做原子替换时临时文件与目标文件须同目录。
 
 ### 5.4 Web 测试：test_client + CSRF
 
@@ -580,8 +606,8 @@ self.c.post('/api/questions', json={...}, headers={"X-CSRF-Token": self._csrf})
 ### 5.5 测试覆盖什么
 
 - **正常流程**：增 → 改 → 解决 → 删，全链路走一遍。
-- **边界情况**：文件不存在、文件损坏、找不到 ID、非法输入、空标题。
-- **数据兼容**：旧格式数据（缺字段）能否正常加载。
+- **边界情况**：数据库不存在、数据库损坏（非 SQLite 格式）、找不到 ID、非法输入、空标题。
+- **数据约束**：schema DEFAULT 约束补默认值、SQLite 文件格式校验。
 - **安全**：缺/错 CSRF token 拒绝、未登录 401、登录成功/失败、登出失效。
 
 测试不是证明「程序没 bug」，而是**防止改出新 bug**（回归测试）。
@@ -594,14 +620,14 @@ self.c.post('/api/questions', json={...}, headers={"X-CSRF-Token": self._csrf})
 
 **入门级**
 
-1. 给问题增加「重要程度」字段（高/中/低），列表里用 `★` 显示——体会「加一个字段要改哪些地方」（提示：`models.py` 的 `to_dict`/`from_dict`、CLI 的显示、Web 的表单和卡片）。
+1. 给问题增加「重要程度」字段（高/中/低），列表里用 `★` 显示——体会「加一个字段要改哪些地方」（提示：`schema.sql` 与 `models.py` 内联的 `_SCHEMA_SQL` 加列、`Question` 的 `to_dict`/`from_dict`、CLI 的显示、Web 的表单和卡片；注意旧 `questions.db` 已有数据，需考虑兼容——`ALTER TABLE ADD COLUMN ... DEFAULT ...` 是不破坏旧数据的加列方式）。
 2. 添加问题时校验标题长度（超过 50 字拒绝）——练习输入校验。
 
 **进阶级**
 
 3. 把搜索改成 OR 逻辑（任一关键词命中即可）——对比 AND 实现的差异，思考哪种更实用。
-4. 给 Web 版加「按分类统计」接口：`GET /api/stats` 返回每个分类的问题数，前端画成柱状图。
-5. 用 SQLite 替换 JSON 存储——体会「存储隔离」的价值（`models.py` 内部换实现，界面层不动）。
+4. 给 Web 版加「按分类统计」接口：`GET /api/stats` 返回每个分类的问题数，前端画成柱状图（提示：直接用 `SELECT category, COUNT(*) ... GROUP BY category` 一条 SQL 搞定，体会关系型数据库的聚合能力）。
+5. 把 `save_questions` 的「DELETE 全表 + INSERT 全部」改成「只更新变化的那几行」——体会「全量覆盖」与「增量更新」的取舍（提示：用 `UPDATE`/`DELETE WHERE id=?`/`INSERT`，需要跟踪哪些是新增/修改/删除）。
 
 **挑战级**
 
@@ -618,7 +644,8 @@ self.c.post('/api/questions', json={...}, headers={"X-CSRF-Token": self._csrf})
   - 值拷贝陷阱（`from ... import` 是值拷贝）
   - `questions[:] = ...` 原地修改 vs 重新赋值
   - REST 状态码语义
-  - 原子写入（`os.replace`）与跨进程文件锁
+  - 数据库事务（`BEGIN`/`commit`/`rollback`）与跨进程文件锁
+  - 参数化查询防 SQL 注入（`?` 占位符 vs 字符串拼接）
   - 密码哈希（PBKDF2 + 盐）与防时序攻击（`hmac.compare_digest`）
   - CSRF 攻击原理与 token 防御
 

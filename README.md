@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
 ![Flask](https://img.shields.io/badge/Flask-3.x-000000)
 ![Interface](https://img.shields.io/badge/Interface-CLI%20%2B%20Web-38BDF8)
-![Storage](https://img.shields.io/badge/Storage-JSON-16A34A)
+![Storage](https://img.shields.io/badge/Storage-SQLite-003B57)
 
 个人问题记录与知识管理工具。支持 **命令行（CLI）** 与 **Web 界面** 双端操作，帮助用户系统化地记录学习与工作中遇到的问题、追踪解决进度、沉淀解决方案，并支持分类管理、全文检索、数据备份与导出。
 
@@ -37,9 +37,9 @@ Question Notebook 是一个轻量级的问题记录系统，核心价值在于�
 1. **随时记录**：以最小成本捕捉日常遇到的技术问题与学习疑问
 2. **闭环管理**：从记录 → 分析 → 解决 → 沉淀方案，形成完整闭环
 3. **高效检索**：多关键词搜索、状态筛选、分类浏览，快速定位历史问题
-4. **数据自主**：数据以标准 JSON 格式存储于本地，用户完全掌控，支持一键备份与恢复
+4. **数据自主**：数据以 SQLite 数据库存储于本地，用户完全掌控，支持一键备份与恢复
 
-CLI 与 Web 两个前端共享同一数据层与数据文件，数据完全互通，用户可根据场景自由切换。
+CLI 与 Web 两个前端共享同一数据层与数据库文件，数据完全互通，用户可根据场景自由切换。
 
 ## 功能特性
 
@@ -53,10 +53,10 @@ CLI 与 Web 两个前端共享同一数据层与数据文件，数据完全互�
 | 检索 | 多关键词搜索 | 空格分隔多个关键词，AND 逻辑（全部命中） |
 | 检索 | 状态筛选 | 按未解决/已解决过滤 |
 | 检索 | 分类浏览 | 按分类聚合查看 |
-| 数据 | 自动持久化 | 数据实时写入本地 JSON 文件 |
-| 数据 | 备份与恢复 | 带时间戳快照备份，覆盖前二次确认 |
+| 数据 | 自动持久化 | 数据实时写入本地 SQLite 数据库 |
+| 数据 | 备份与恢复 | 带时间戳快照备份（.db 副本），覆盖前二次确认 |
 | 数据 | 导出 CSV | UTF-8 BOM 编码，Excel 直接打开无乱码 |
-| 兼容 | 旧数据兼容 | 缺失字段的历史数据自动补默认值，无缝升级 |
+| 兼容 | 迁移工具 | 提供 `migrate_to_sqlite.py`，将历史 `questions.json` 一键迁入 SQLite |
 | 安全 | 密码认证 | 可选：设置环境变量后启用登录，密码 PBKDF2 哈希存储 |
 | 安全 | CSRF 防护 | 所有写操作校验 X-CSRF-Token，防止跨站请求伪造 |
 
@@ -76,8 +76,8 @@ CLI 与 Web 两个前端共享同一数据层与数据文件，数据完全互�
             │       调用         │
 ┌───────────┴────────────────────┴───────────┐
 │                数据层（models.py）           │
-│  Question 模型 · 序列化 · JSON 文件读写      │
-│  （含损坏自动备份、旧数据兼容）               │
+│  Question 模型 · 序列化 · SQLite 读写        │
+│  （含损坏自动备份、schema 自举建表）         │
 └─────────────────────────────────────────────┘
 ```
 
@@ -85,16 +85,16 @@ CLI 与 Web 两个前端共享同一数据层与数据文件，数据完全互�
 
 - **单一职责**：数据层只负责数据存取，界面层只负责交互展示
 - **依赖单向**：界面层依赖数据层，数据层不依赖任何界面实现
-- **存储隔离**：数据存取逻辑集中在 `models.py`，未来迁移至 SQLite/PostgreSQL 时界面层无需改动
+- **存储隔离**：数据存取逻辑集中在 `models.py`，未来迁移至 PostgreSQL 时界面层无需改动
 
 ## 技术栈
 
 | 组件 | 技术 | 说明 |
 |------|------|------|
-| 语言 | Python 3.10+ | 标准库为主，无第三方运行时依赖 |
+| 语言 | Python 3.10+ | 标准库为主，无第三方运行时依赖（除 Flask） |
 | Web 框架 | Flask 3.x | 轻量级 WSGI 应用框架 |
 | 前端 | 原生 HTML/CSS/JavaScript | 无框架依赖，深色响应式界面 |
-| 存储 | JSON 文件 | UTF-8 编码，`indent=4` 格式化，`ensure_ascii=False` 保留中文 |
+| 存储 | SQLite | 标准库 `sqlite3`，单文件数据库，零配置 |
 | 测试 | unittest | 标准库测试框架 + mock 输入模拟 |
 
 ## 快速开始
@@ -118,7 +118,19 @@ python web_app.py
 
 启动后浏览器访问 **http://127.0.0.1:5000**。
 
-首次运行自动创建数据文件 `questions.json`。
+首次运行会在项目根目录自动创建 SQLite 数据库 `questions.db`（首次写入时建表）。
+
+### 从旧版 JSON 迁移（可选）
+
+若你用过 v0.1.x 的 JSON 存储版本，升级到 v0.2.0 后可用迁移脚本把 `questions.json` 一键导入 SQLite：
+
+```bash
+python migrate_to_sqlite.py             # 执行迁移
+python migrate_to_sqlite.py --dry-run   # 仅预览，不写库
+python migrate_to_sqlite.py --force     # 覆盖已存在的 questions.db（先备份）
+```
+
+迁移会：备份原 JSON 到 `backups/` → 应用 `schema.sql` 建表 → 单事务导入数据 → 读回校验。原有 ID 完整保留。迁移确认无误后可删除 `questions.json`。
 
 ### 启用密码认证（可选）
 
@@ -169,29 +181,29 @@ $env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python web_app.py
 
 ### 备份与恢复
 
-- 备份文件存放于 `backups/` 目录，命名格式：`questions_YYYYMMDD_HHMMSS.json`
+- 备份文件存放于 `backups/` 目录，命名格式：`questions_YYYYMMDD_HHMMSS_微秒.db`
 - 恢复操作会覆盖当前全部数据，执行前有二次确认
 - Web 版恢复功能含路径穿越防护，仅允许选择备份目录内文件
 
 ## 数据存储
 
-数据文件：项目根目录 `questions.json`，内容为**问题对象数组**，格式如下：
+数据存储于项目根目录的 SQLite 数据库 `questions.db`，单文件、零配置。表结构定义在 [schema.sql](schema.sql)（`models.py` 内部也内联了一份等价的建表 SQL，确保无 schema.sql 时仍能自举建库）。
 
-```json
-[
-    {
-        "id": 1,
-        "title": "问题标题",
-        "description": "问题详细描述",
-        "timestamp": "2026-07-24 11:10:38",
-        "is_solved": false,
-        "solution": "解决方案（未解决时为空字符串）",
-        "category": "未分类"
-    }
-]
-```
+### 表结构（`questions` 表）
 
-### 字段说明
+| 列 | 类型 | 约束 | 说明 |
+|----|------|------|------|
+| `id` | INTEGER | PRIMARY KEY | 问题唯一标识，自增 |
+| `title` | TEXT | NOT NULL | 问题标题，必填 |
+| `description` | TEXT | NOT NULL DEFAULT '' | 问题详细描述 |
+| `timestamp` | TEXT | NOT NULL | 创建时间，`YYYY-MM-DD HH:MM:SS` |
+| `is_solved` | INTEGER | NOT NULL DEFAULT 0, CHECK IN (0,1) | 解决状态（0/1，SQLite 无布尔型） |
+| `solution` | TEXT | NOT NULL DEFAULT '' | 解决方案 |
+| `category` | TEXT | NOT NULL DEFAULT '未分类' | 问题分类 |
+
+索引：`idx_questions_category`、`idx_questions_is_solved`、`idx_questions_timestamp`（支撑筛选与后续可视化统计）。
+
+### 字段说明（对应 `Question` 模型）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -199,11 +211,11 @@ $env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python web_app.py
 | `title` | str | 问题标题，必填 |
 | `description` | str | 问题详细描述，可为空 |
 | `timestamp` | str | 创建时间，格式 `YYYY-MM-DD HH:MM:SS` |
-| `is_solved` | bool | 解决状态 |
+| `is_solved` | bool | 解决状态（库内存 0/1，读取时还原为布尔） |
 | `solution` | str | 解决方案，未解决时为空字符串 |
 | `category` | str | 问题分类，默认 `未分类` |
 
-> **兼容性说明**：加载历史数据时，缺失字段（如 `category`）会自动补默认值，无需人工迁移。
+> **容错**：数据库文件损坏（非有效 SQLite 格式）时自动备份为 `questions.db.bak` 后重建，不崩溃。
 
 ## API 文档
 
@@ -242,7 +254,7 @@ python test_qn.py
 ```
 
 **测试覆盖：**
-- 数据层：模型序列化往返、读写循环、原子写入无残留、旧数据兼容、损坏文件容错（含顶层结构异常）、备份文件名唯一性、恢复文件名白名单、CSV 生成
+- 数据层：模型序列化往返、读写循环、schema 默认值、损坏数据库容错（含非 SQLite 文件）、备份文件名唯一性、恢复文件名白名单、CSV 生成
 - CLI 层：完整业务流程（增→改→搜→解决→删）、备份恢复往返、CSV 导出（含 BOM 校验）、分类浏览、多关键词搜索
 - Web 层：增删改查全链路、空 body/非法 JSON、CSRF 缺失/错误拒绝、登录成功/失败、登出失效、免登录默认态
 
@@ -250,15 +262,17 @@ python test_qn.py
 
 ```
 question_notebook/
-├── models.py              # 数据层：Question 模型 + JSON 读写
+├── models.py              # 数据层：Question 模型 + SQLite 读写 + 跨进程锁
 ├── question_notebook.py   # CLI 界面层
 ├── web_app.py             # Web 界面层（Flask 路由）
 ├── templates/
 │   └── index.html         # Web 前端页面
-├── questions.json         # 数据文件（首次运行自动生成）
+├── schema.sql             # SQLite 表结构定义（建表/索引）
+├── migrate_to_sqlite.py   # JSON → SQLite 一次性迁移脚本
+├── questions.db           # SQLite 数据库（首次运行自动生成）
 ├── .flask_secret          # Flask 会话签名密钥（首次运行自动生成）
 ├── .auth_salt             # 密码哈希盐（启用认证后首次运行自动生成）
-├── backups/               # 备份目录（备份时自动创建）
+├── backups/               # 备份目录（.db 快照，备份时自动创建）
 ├── exports/               # CSV 导出目录（导出时自动创建）
 ├── ROADMAP.md             # 路线图（版本规划与演进方向）
 ├── TUTORIAL.md            # 教学文档（代码讲解 + 动手练习）
@@ -273,12 +287,29 @@ question_notebook/
 | 版本 | 主题 | 状态 |
 |------|------|------|
 | v0.1.0 | 个人工具（CLI + Web + 模块化） | ✅ 已发布 |
-| v0.2.0 | 数据升级（SQLite + 可视化） | 📋 规划中 |
+| v0.2.0 | 数据升级（SQLite 迁移） | ✅ 已完成 |
 | v0.3.0 | 社区化（用户系统 + 问答） | 📋 规划中 |
 | v0.4.0 | 社会问题采集（数据接入） | 📋 规划中 |
 | v1.0.0 | 关联与发布（平台化） | 📋 规划中 |
 
 ## 更新日志
+
+### 2026-08-22 · v0.2.0 数据升级（SQLite 迁移）
+
+**存储迁移**
+- 数据存储从 `questions.json` 迁移到 SQLite 数据库（`questions.db`），单文件、零配置
+- 新增 [schema.sql](schema.sql)：定义 `questions` 表结构与 3 个索引（category / is_solved / timestamp）
+- 新增 [migrate_to_sqlite.py](migrate_to_sqlite.py)：JSON → SQLite 一次性迁移脚本，支持 `--dry-run` 预览与 `--force` 覆盖
+
+**数据层改造（`models.py`）**
+- `load_questions` / `save_questions` 内部实现切换为 SQLite，对外 API 完全不变，界面层零改动
+- `save_questions` 改为单事务（DELETE 全表 → INSERT 全部），失败整体回滚；ID 分配逻辑不变
+- 备份/恢复文件名后缀 `.json` → `.db`，恢复采用原子替换（临时文件 + `os.replace`）
+- 损坏容错：非有效 SQLite 文件自动备份为 `.bak` 后重建
+- 保留 `data_lock` 跨进程锁（应用层串行化，避免 SQLite "database is locked"）
+
+**测试**
+- 更新数据层测试：新增 schema 默认值校验、SQLite 文件格式校验；损坏容错用例适配非 SQLite 文件场景
 
 ### 2026-08-16 · v0.1.2 Web 安全加固
 
