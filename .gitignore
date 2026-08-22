@@ -6,6 +6,12 @@ __pycache__/
 # 数据备份
 questions.json.bak
 
+# SQLite 数据库（v0.2.0 迁移产物，本地数据不纳入版本库）
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Trae 工具产物（HTML 分享包等，非项目内容）
 .trae-html-share-packages/
 
