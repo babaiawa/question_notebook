@@ -1,0 +1,48 @@
+# =============================================================================
+# .editorconfig —— 编辑器统一格式约定
+#
+# 作用：告诉各种编辑器（VS Code / PyCharm / Notepad++ 等）「本项目的文件该长什么样」。
+# 好处：不同人、不同编辑器写出来的代码格式一致，不会出现「我只改了一行，
+#       却显示几百行改动」这种因空格/换行符不同造成的假差异。
+#
+# 说明：很多编辑器原生支持；VS Code 需装 EditorConfig 扩展。
+# 本文件只影响「你正在编辑的文件」，不改动已有历史内容。
+# =============================================================================
+
+# 所有文件的基础约定
+root = true
+
+[*]
+charset = utf-8                # 统一 UTF-8 编码：中文不会变成乱码
+end_of_line = lf               # 统一换行符为 LF（Linux 风格），Git 会在 Windows 检出时自动转 CRLF
+insert_final_newline = true    # 文件末尾保留一个空行（Git diff 更干净）
+trim_trailing_whitespace = true  # 自动删除行尾多余空格
+
+[*.py]
+indent_style = space           # Python 用空格缩进（绝不能用 Tab，混用会报 IndentationError）
+indent_size = 4                # 每层缩进 4 个空格（PEP 8 官方规定）
+
+[*.{md,markdown}]
+trim_trailing_whitespace = false  # Markdown 里「行尾两个空格」表示强制换行，不能删
+
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2                # YAML 约定用 2 空格
+
+[*.{json,toml}]
+indent_style = space
+indent_size = 2
+
+[*.{html,css,js}]
+indent_style = space
+indent_size = 2                # 前端文件缩进用 2 空格
+
+[*.sql]
+indent_style = space
+indent_size = 4
+
+[*.{bat,cmd}]
+end_of_line = crlf             # Windows 批处理文件必须用 CRLF，否则可能无法运行
+
+[Makefile]
+indent_style = tab             # Makefile 语法要求 Tab 缩进

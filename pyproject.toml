@@ -1,0 +1,128 @@
+# -*- coding: utf-8 -*-
+# =============================================================================
+# pyproject.toml —— 项目的「身份证 + 说明书」
+#
+# 这个文件做四件事：
+#   1. [project]     声明项目是谁、需要哪个 Python、依赖哪些第三方包
+#   2. [tool.ruff]   配置代码校对员（挑错 + 自动排版）的规则
+#   3. [tool.pytest] 配置测试运行器的行为（去哪找测试、怎么显示结果）
+#   4. [tool.coverage] 配置测试覆盖率报告（可选，看测试到底覆盖了多少代码）
+#
+# 名词解释（给新手）：
+#   - 依赖（dependency）：你的程序要用到的、别人写好的代码包。本项目只需要 Flask。
+#   - lint：不改功能，只挑「写法问题」的自动检查，如多余的 import、拼错的名字。
+#   - 测试运行器：自动把你的测试用例跑一遍并汇总结果的工具。
+#
+# 改这个文件后无需任何「编译」步骤，工具下次运行时会自动读取。
+# =============================================================================
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "question-notebook"
+version = "0.2.2"
+description = "问题笔记本：个人问题记录与知识管理工具（CLI + Web 双端）"
+readme = "README.md"
+# requires-python 是「最低 Python 版本」的硬性声明。
+# 代码里用到了 f-string、`X | None` 之类的现代语法，因此要求 3.10 起。
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["question", "notebook", "knowledge-management", "sqlite", "flask"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business",
+]
+
+# 运行本项目**必需**的第三方包。没装这些，程序跑不起来。
+dependencies = [
+    "Flask>=2.3",  # web_app.py 用它提供网页界面；2.3+ 才有 app.json.ensure_ascii
+]
+
+# 可选依赖：只在「开发/测试」时需要，普通用户不用装。
+# 安装方式：pip install -e ".[dev]"
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",    # 代码校对员：挑错 + 自动排版
+    "pytest>=7.0",  # 测试运行器：比自带的 unittest 更好用
+    "coverage>=7.0",  # 覆盖率统计：看测试跑到了多少代码
+]
+
+# -----------------------------------------------------------------------------
+# 注意：本项目采用「平铺式」布局（models.py / question_notebook.py / web_app.py
+# 都直接在根目录），不注册命令行入口点（console_scripts）。
+# 原因：入口点要求项目是一个可导入的包，那需要先做目录结构重组（= 高风险改动）。
+# 启动方式保持原样，见 README「快速开始」：
+#     python question_notebook.py      # 命令行版
+#     python web_app.py                # 网页版
+# -----------------------------------------------------------------------------
+
+# =============================================================================
+# ruff：代码校对员配置
+# 常用命令：
+#   ruff check .          # 只检查，列出问题
+#   ruff check --fix .    # 检查并自动修复能修的
+#   ruff format .         # 按统一风格重新排版
+# =============================================================================
+[tool.ruff]
+line-length = 100          # 一行最多 100 字符（超出只是提示，不是错误）
+target-version = "py310"   # 按 Python 3.10 的语法规则检查（与 requires-python 一致）
+extend-exclude = [
+    "__pycache__",
+    "templates",           # 前端 HTML 模板不是 Python 代码
+    "backups",
+    "exports",
+]
+
+[tool.ruff.lint]
+# 启用的规则组（每组一个字母前缀）：
+#   E  = pycodestyle 错误（如空行数量不对）
+#   W  = pycodestyle 警告（如行尾有多余空格）
+#   F  = pyflakes：找出真正的代码缺陷（未使用的变量/导入、名字拼错）
+#   I  = isort：import 语句的排序与分组
+select = ["E", "W", "F", "I"]
+
+# 忽略的规则（逐条说明为什么）：
+#   E501 = 单行超长。中文注释和文档字符串本来就容易超长，强制断行会伤害可读性。
+#   E402 = import 不在文件顶部。test_qn.py 必须先 sys.path.insert() 再 import，
+#          这是测试文件的标准写法，属于有意为之。
+ignore = ["E501", "E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["models", "question_notebook", "web_app", "migrate_to_sqlite"]
+
+# =============================================================================
+# pytest：测试运行器配置
+# 常用命令：
+#   pytest                     # 跑全部测试
+#   pytest -v                  # 显示每个用例名
+#   pytest -k 搜索关键词        # 只跑名字匹配的用例
+#   pytest --lf                # 只重跑上次失败的用例
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["."]              # 从项目根目录找测试
+python_files = ["test_*.py"]   # 文件名匹配 test_*.py 的才算测试文件
+python_classes = ["Test*"]     # 类名以 Test 开头的才算测试类
+python_functions = ["test_*"]  # 函数名以 test_ 开头的才算测试用例
+addopts = "-v --tb=short"      # 默认详细输出 + 简短错误回溯
+
+# =============================================================================
+# coverage：测试覆盖率（可选工具，回答「测试到底覆盖了多少行代码」）
+# 用法：coverage run -m pytest && coverage report -m
+# =============================================================================
+[tool.coverage.run]
+source = ["models", "question_notebook", "web_app"]
+branch = true   # 同时统计「分支覆盖」：if/else 两边是否都被测到
+
+[tool.coverage.report]
+show_missing = true   # 列出没被测试覆盖到的具体行号
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",  # 启动入口不参与覆盖率统计
+    "raise NotImplementedError",
+]

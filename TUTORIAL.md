@@ -38,11 +38,13 @@ Question Notebook 是一个「问题笔记本」：记录你学习、工作中�
 # 1. 确认 Python 版本（需要 3.10+）
 python --version
 
-# 2. 跑命令行版
+# 2. 装依赖（本项目运行只需要 Flask 一个包，清单写在 requirements.txt）
+pip install -r requirements.txt
+
+# 3. 跑命令行版
 python question_notebook.py
 
-# 3. 跑网页版（需要先装 Flask）
-pip install flask
+# 4. 跑网页版
 python web_app.py
 # 浏览器打开 http://127.0.0.1:5000
 ```
@@ -66,11 +68,14 @@ question_notebook/
 ├── web_app.py             # Web 界面层：Flask 路由、认证、CSRF
 ├── templates/
 │   └── index.html         # Web 前端页面（HTML + CSS + JS）
-├── test_qn.py             # 自动化测试
+├── test_qn.py             # 自动化测试（37 个用例）
 ├── schema.sql             # SQLite 表结构定义（建表/索引）
 ├── migrate_to_sqlite.py   # 旧版 JSON → SQLite 一次性迁移脚本
-├── questions.db           # SQLite 数据库（首次运行自动生成）
-└── ...（README / TUTORIAL / ROADMAP / CODE_WIKI 四份文档）
+├── questions.db           # SQLite 数据库（首次运行自动生成，不入版本库）
+├── pyproject.toml         # 项目配置：依赖声明 + ruff/pytest 配置
+├── requirements.txt       # 运行依赖清单（只有 Flask）
+├── requirements-dev.txt   # 开发依赖清单（ruff / pytest / coverage）
+└── ...（STANDARDS / README / TUTORIAL / ROADMAP / CODE_WIKI 等文档）
 ```
 
 ### 0.4 整体架构一句话
@@ -576,7 +581,9 @@ from models import DATA_FILE   # 这是「拷贝」了当时的字符串值！
 
 两种解法：
 - 用 `import models` 然后 `models.DATA_FILE`（始终读最新值）。
-- 测试时两个模块的常量一起改（本项目采用，见 `test_qn.py`）。
+- 测试时两个模块的常量一起改（早期版本采用，但容易漏改一边）。
+
+**本项目现在采用第一种思路的单点维护**：路径常量的唯一定义处是 `models.py`，其他模块运行时通过 `models` 模块取值，因此测试只需重定向 `models.*` 一处即可全局生效（详见 5.3 节）。
 
 > **进阶坑**：测试隔离还要求 `BASE_DIR` 也要一起重定向——因为 `restore_data` 做原子替换时临时文件要和目标文件同目录（`os.replace` 跨文件系统会失败）。
 
@@ -601,12 +608,12 @@ from models import DATA_FILE   # 这是「拷贝」了当时的字符串值！
 手动测试靠人肉点菜单，改一次代码点一遍，迟早漏。自动化测试把「验证」变成一条命令：
 
 ```bash
-python test_qn.py
-# 或
-python -m unittest test_qn
+python test_qn.py      # 推荐日常用：零依赖，只需 Python 标准库
+# 或（装了 pytest 后，输出更清晰，支持 -k 筛选、--lf 重跑失败项）
+pytest
 ```
 
-跑一遍，34 个用例全绿，就说明这次改动没把已有功能改坏。
+跑一遍，**37 个用例全绿**，就说明这次改动没把已有功能改坏。
 
 ### 5.2 模拟用户输入：mock
 
@@ -620,17 +627,34 @@ with patch('builtins.input', side_effect=["测试问题", "描述", "编程"]):
 # side_effect 列表里的值，会依次作为 input() 的返回值
 ```
 
-### 5.3 测试隔离：临时目录
+### 5.3 测试隔离：项目内的临时目录
 
-测试要写数据库，直接跑会污染真实 `questions.db`。解法是把路径重定向到临时目录：
+测试要写数据库，直接跑会污染真实 `questions.db`。解法是把数据路径重定向到一个临时目录。项目里的做法是抽出一个公共基类 `QuestionNotebookTestCase`，三个测试类都继承它：
 
 ```python
-self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
-models.BASE_DIR = cli.BASE_DIR = self.tmpdir
-models.DATA_FILE = cli.DATA_FILE = os.path.join(self.tmpdir, "questions.db")
+class QuestionNotebookTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = _make_test_tmpdir()          # 项目内 .tmp/ 下的唯一目录
+        models.BASE_DIR = self.tmpdir
+        models.DATA_FILE = os.path.join(self.tmpdir, "questions.db")
+        models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
+        models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
+        # 静音标准输出：CLI 的菜单打印不再刷屏，测试结论一眼可见
+        self._stdout_ctx = contextlib.redirect_stdout(io.StringIO())
+        self._stdout_ctx.__enter__()
+
+    def tearDown(self):
+        self._stdout_ctx.__exit__(None, None, None)
+        _remove_tmpdir(self.tmpdir)   # 删除失败会明确警告，不静默吞掉
 ```
 
-**注意两边都要改**——这正是第 4 课「值拷贝陷阱」的实战应用。`BASE_DIR` 也要一起改，因为 `restore_data` 做原子替换时临时文件与目标文件须同目录。
+三个关键设计点：
+
+1. **只改 `models` 一处即可。** 第 4 课讲过 `from X import Y` 是值拷贝，那为什么这里不用像早期版本那样 `models.DATA_FILE = cli.DATA_FILE = ...` 两边一起改？因为 `question_notebook.py` 虽然用 `from models import load_questions` 导入了**函数**，但函数内部是运行时通过 `models` 模块去取 `DATA_FILE` 的；CLI 自身没有缓存这份路径。所以重定向 `models` 就全局生效了。**这也是「单点维护」的价值**：路径只有一处来源。
+
+2. **临时目录放在项目内 `.tmp/`，而不是系统临时目录。** 早期实现用 `tempfile.mkdtemp()`，默认落在系统临时目录——在沙箱、受限环境或部分 CI 容器里那里**不可写**，整套测试会直接崩在 `.data.lock` 的 `PermissionError` 上。现在改为在项目内自建目录（`os.makedirs` + 随机后缀）。顺带一提：这里刻意不用 `tempfile.mkdtemp()`，因为部分沙箱实现连"往 mkdtemp 建的目录里写文件"都会拦。`.tmp/` 已在 `.gitignore` 中，跑完自动删除。
+
+3. **`BASE_DIR` 也要一起改**，因为 `restore_data` 做原子替换时，临时文件必须与目标文件同目录（跨文件系统 `os.replace` 会失败）。
 
 ### 5.4 Web 测试：test_client + CSRF
 
@@ -654,6 +678,14 @@ self.c.post('/api/questions', json={...}, headers={"X-CSRF-Token": self._csrf})
 - **安全**：缺/错 CSRF token 拒绝、未登录 401、登录成功/失败、登出失效。
 
 测试不是证明「程序没 bug」，而是**防止改出新 bug**（回归测试）。
+
+### 5.6 改代码的规矩
+
+本项目的工程规范（依赖管理、代码风格、测试要求、CI、提交信息格式）单独写在 [STANDARDS.md](STANDARDS.md)，含面向新手的名词解释。改代码前后至少记住三件事：
+
+1. 改完先跑 `python test_qn.py`，**37 项必须全绿**；
+2. 修 bug 要补一个能复现它的测试用例；
+3. 提交说明按 `类型: 说明` 写（如 `fix(cli): 修复搜索后数据未刷新`），别写 `update`。
 
 ---
 

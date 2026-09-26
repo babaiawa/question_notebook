@@ -2,22 +2,34 @@
 """
 test_qn.py - Question Notebook 自动化测试
 
-运行：python test_qn.py
+运行方式（两种都支持，结果一致）：
+    pytest                                  # 推荐：更清晰的输出，可 -k 筛选、--lf 重跑失败项
+    python test_qn.py                       # 无需安装任何工具（只用 Python 标准库）
 
 覆盖范围：
 - 数据层（models）：模型序列化往返、读写循环、旧数据兼容、损坏文件容错
 - CLI 层：完整业务流程、备份恢复、CSV 导出、分类浏览、多关键词搜索
+- Web 层：增删改查、CSRF 防护、登录登出、统计接口
 
-安全说明：测试会将数据文件重定向到临时目录，不会读写真实的 questions.db。
+安全说明：测试会把数据路径重定向到项目内的 .tmp/ 临时目录，不会读写真实的
+questions.db。临时目录放在项目内（而非系统临时目录）有两个原因：
+  1. 沙箱/受限环境下，系统临时目录往往不可写，测试会直接报 PermissionError；
+  2. 所有测试产物集中在项目内，随时可以整体删除，不污染系统磁盘。
 """
+import contextlib
+import io
 import os
-import sys
 import shutil
+import sys
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 项目根目录（测试自身所在目录），用于定位工作区内的临时目录
+WORKSPACE_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+sys.path.insert(0, WORKSPACE_ROOT)
 import models
 import question_notebook as cli
 
@@ -29,21 +41,98 @@ except ImportError:
     HAS_FLASK = False
 
 
-class TestModels(unittest.TestCase):
-    """数据层测试"""
+def _make_test_tmpdir():
+    """在项目内的 .tmp/ 下创建唯一临时目录，返回其绝对路径。
+
+    为什么不用 tempfile.mkdtemp()：
+      1. 它默认把目录建在系统临时目录（Windows 为 %TEMP%），在受限沙箱环境下
+         系统临时目录不可写，测试会因为 PermissionError 直接失败；
+      2. 部分沙箱实现会拦截对 mkdtemp 所建目录的后续写入。
+    因此这里改为「os.makedirs + 随机后缀」自建目录：既落在项目内（随时可整体
+    删除、不污染系统盘），又不受上述限制。目录名唯一，用例之间互不干扰。
+
+    万一 .tmp/ 本身不可写（如只读介质），再退回系统临时目录，保证测试总能跑。
+    """
+    base = os.path.join(WORKSPACE_ROOT, ".tmp")
+    try:
+        os.makedirs(base, exist_ok=True)
+        tmpdir = os.path.join(base, "qn_test_" + uuid.uuid4().hex[:8])
+        os.makedirs(tmpdir, exist_ok=False)  # 随机后缀保证不会重名
+        return tmpdir
+    except OSError:
+        return tempfile.mkdtemp(prefix="qn_test_")
+
+
+def _remove_tmpdir(path):
+    """删除测试临时目录；失败时打印警告，绝不静默吞掉。
+
+    为什么不用 shutil.rmtree(..., ignore_errors=True)：
+      它在 Windows 上常因「文件只读 / 目录正被占用 / 沙箱拦截」而删除失败，
+      却一个字都不报。结果是 .tmp/ 里悄悄堆积成百上千个垃圾目录，无人察觉。
+      这里改为：先正常删；遇到失败就把目标改成可写再重试一次；仍失败则明确警告。
+
+    返回值：True 表示已删除，False 表示删除失败（已警告）。
+    """
+    if not os.path.exists(path):
+        return True
+
+    def _force_writable(func, target, _exc_info):
+        """shutil 的失败回调：去掉只读属性后重试该操作。"""
+        try:
+            os.chmod(target, 0o700)
+            func(target)
+        except OSError:
+            pass  # 交给外层统一判断是否真的删掉了
+
+    try:
+        shutil.rmtree(path, onerror=_force_writable)
+    except OSError:
+        pass
+
+    if os.path.exists(path):
+        print(f"[警告] 测试临时目录删除失败：{path}（可手动删除）", file=sys.stderr)
+        return False
+
+    # 顺手清理：若 .tmp/ 已空则一并移除，不给项目留下空目录。
+    # os.rmdir 只在目录为空时成功，因此不会误删其他用例正在使用的目录。
+    try:
+        os.rmdir(os.path.join(WORKSPACE_ROOT, ".tmp"))
+    except OSError:
+        pass  # 目录非空（其他用例还在用）或不存在，属于正常情况
+    return True
+
+
+class QuestionNotebookTestCase(unittest.TestCase):
+    """所有测试类的公共基类：负责数据隔离与输出降噪。
+
+    每个用例开始前：
+      1. 新建独立的临时目录，把 models 的数据路径全部指向它
+         → 用例之间互不干扰，也绝不碰真实的 questions.db
+      2. 把标准输出暂时"关掉" → CLI 的菜单、提示语不再刷屏，
+         测试结果一目了然（打印语句的执行本身不受影响）
+
+    用例结束后：删除临时目录、恢复标准输出。即使用例失败也一定会执行（tearDown）。
+    """
 
     def setUp(self):
-        # 数据重定向到临时目录，隔离真实数据。
-        # CLI/Web 通过 models.X 动态访问路径常量（见 #7 重构），
-        # 因此只需改 models 一处，无需再同步 cli/web。
-        self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
+        self.tmpdir = _make_test_tmpdir()
+        # 数据层通过 models 模块属性动态定位文件，因此只需改这里一处
         models.BASE_DIR = self.tmpdir
         models.DATA_FILE = os.path.join(self.tmpdir, "questions.db")
         models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
         models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
 
+        # 静音标准输出：测试期间所有 print() 都写进内存缓冲区，不显示在终端
+        self._stdout_ctx = contextlib.redirect_stdout(io.StringIO())
+        self._stdout_ctx.__enter__()
+
     def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        self._stdout_ctx.__exit__(None, None, None)
+        _remove_tmpdir(self.tmpdir)
+
+
+class TestModels(QuestionNotebookTestCase):
+    """数据层测试"""
 
     def test_question_roundtrip(self):
         """模型序列化与反序列化往返一致"""
@@ -213,18 +302,8 @@ class TestModels(unittest.TestCase):
         self.assertEqual(s["by_category"], [])
 
 
-class TestCLI(unittest.TestCase):
+class TestCLI(QuestionNotebookTestCase):
     """CLI 界面层测试"""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
-        models.BASE_DIR = self.tmpdir
-        models.DATA_FILE = os.path.join(self.tmpdir, "questions.db")
-        models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
-        models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_full_flow(self):
         """完整业务流程：添加→编辑→解决→删除"""
@@ -316,7 +395,7 @@ class TestCLI(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_FLASK, "未安装 Flask，跳过 Web 接口测试")
-class TestWeb(unittest.TestCase):
+class TestWeb(QuestionNotebookTestCase):
     """Web 接口层测试（Flask test_client，无需启动真实服务）。
 
     注意：Web 端启用了 CSRF 防护，所有非 GET 请求都要带上 session 里的
@@ -335,19 +414,13 @@ class TestWeb(unittest.TestCase):
         cls.client = web_app.app.test_client()
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="qn_test_")
-        models.BASE_DIR = self.tmpdir
-        models.DATA_FILE = os.path.join(self.tmpdir, "questions.db")
-        models.BACKUP_DIR = os.path.join(self.tmpdir, "backups")
-        models.EXPORT_DIR = os.path.join(self.tmpdir, "exports")
+        # 临时目录与数据路径重定向由基类 QuestionNotebookTestCase 统一处理
+        super().setUp()
         # 测试客户端：复用 cookies/session，确保 CSRF token 与请求同源
         self.c = self.app.test_client()
         # 先 GET 一次首页或 csrf 接口，建立会话并拿到 CSRF token
         r = self.c.get('/api/csrf')
         self._csrf = r.get_json()["token"]
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     # ---------- 带 CSRF 头的请求辅助 ----------
 
@@ -641,5 +714,15 @@ class TestWeb(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    # 直接运行 python test_qn.py 时，用一个自定义 Runner 把结果压成一行，
+    # 避免 unittest 默认的 "...." 点阵输出让人看不清最终结论。
+    _runner = unittest.TextTestRunner(verbosity=2, buffer=False)
+    _result = _runner.run(unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__]))
+    print(f"\n{'=' * 60}")
+    print(f"测试结果：共 {_result.testsRun} 项 | "
+          f"通过 {_result.testsRun - len(_result.failures) - len(_result.errors)} 项 | "
+          f"失败 {len(_result.failures)} 项 | 错误 {len(_result.errors)} 项 | "
+          f"跳过 {len(_result.skipped)} 项")
+    print("=" * 60)
+    sys.exit(0 if _result.wasSuccessful() else 1)
 

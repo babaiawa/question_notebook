@@ -27,6 +27,7 @@
 > 📖 **教学文档**：想系统学习这个项目的代码实现（数据模型、CLI、Web、架构、测试），请阅读 [TUTORIAL.md](TUTORIAL.md)，含配套动手练习。
 > 🗺️ **路线规划**：项目的版本规划与演进方向，详见 [ROADMAP.md](ROADMAP.md)。
 > 📚 **代码知识库**：面向开发者的代码级详解（模块职责、关键函数、业务流程），详见 [CODE_WIKI.md](CODE_WIKI.md)。
+> 📐 **工程规范**：依赖管理、代码风格、测试、CI、提交规范（含新手解释），详见 [STANDARDS.md](STANDARDS.md)。
 
 ---
 
@@ -92,18 +93,33 @@ CLI 与 Web 两个前端共享同一数据层与数据库文件，数据完全�
 
 | 组件 | 技术 | 说明 |
 |------|------|------|
-| 语言 | Python 3.10+ | 标准库为主，无第三方运行时依赖（除 Flask） |
-| Web 框架 | Flask 3.x | 轻量级 WSGI 应用框架 |
+| 语言 | Python 3.10+ | 标准库为主，唯一第三方运行时依赖是 Flask |
+| Web 框架 | Flask ≥ 2.3 | 轻量级 WSGI 应用框架（2.3+ 才支持 `app.json.ensure_ascii`） |
 | 前端 | 原生 HTML/CSS/JavaScript | 无框架依赖，深色响应式界面 |
 | 存储 | SQLite | 标准库 `sqlite3`，单文件数据库，零配置 |
-| 测试 | unittest | 标准库测试框架 + mock 输入模拟 |
+| 测试 | pytest / unittest | 37 个用例；也可直接 `python test_qn.py` 零依赖运行 |
+| 代码检查 | ruff | 静态检查（E/W/F/I 规则）+ 格式化，配置见 `pyproject.toml` |
+| CI | GitHub Actions | 四版本 Python 矩阵自动测试 + ruff 检查 |
 
 ## 快速开始
 
 ### 环境要求
 
 - Python 3.10 及以上
-- Web 版需额外安装 Flask：`pip install flask`
+- Web 版需要 Flask（命令行版不需要）
+
+### 安装依赖
+
+依赖声明在 `requirements.txt`，一条命令装齐：
+
+```bash
+pip install -r requirements.txt
+```
+
+> 只有开发/改代码时才需要额外工具（ruff 挑错 + pytest 测试）：
+> ```bash
+> pip install -r requirements-dev.txt
+> ```
 
 ### 启动 CLI
 
@@ -274,16 +290,31 @@ Web 版提供 RESTful API，所有接口返回 JSON（中文原样输出，无 `
 
 ## 测试
 
-项目内置自动化测试，覆盖数据层、CLI 界面层与 Web 层（含认证与 CSRF）：
+项目内置 **37 个自动化测试**，覆盖数据层、CLI 界面层与 Web 层（含认证与 CSRF）。两种运行方式结果一致：
 
 ```bash
-python test_qn.py
+python test_qn.py    # 推荐日常用：零依赖，只需 Python 标准库
+pytest               # 装了 pytest 后可用：支持 -k 筛选、--lf 重跑失败项
+```
+
+pytest 常用参数：
+
+```bash
+pytest -k 备份                    # 只跑名字含"备份"的用例
+pytest --lf                      # 只重跑上次失败的用例
+coverage run -m pytest && coverage report -m   # 看测试覆盖率与未覆盖行号
 ```
 
 **测试覆盖：**
 - 数据层：模型序列化往返、读写循环、schema 默认值、损坏数据库容错（含非 SQLite 文件）、备份文件名唯一性、恢复文件名白名单、CSV 生成、统计聚合（分类分布/解决率/按月趋势，含损坏库容错）
 - CLI 层：完整业务流程（增→改→搜→解决→删）、备份恢复往返、CSV 导出（含 BOM 校验）、分类浏览、多关键词搜索
 - Web 层：增删改查全链路、空 body/非法 JSON、CSRF 缺失/错误拒绝、登录成功/失败、登出失效、免登录默认态、`/api/stats` 随数据变化实时更新
+
+> **测试数据隔离**：所有用例的数据写入项目内 `.tmp/` 临时目录（已在 `.gitignore` 中），
+> 用完自动删除，**绝不会读写你真实的 `questions.db`**。测试输出会自动静音 CLI 菜单打印，
+> 只保留最终结论（如「共 37 项 | 通过 37 项」）。
+>
+> 开发规范（改代码前后该做什么、提交怎么写）见 [STANDARDS.md](STANDARDS.md)。
 
 ## 项目结构
 
@@ -296,12 +327,25 @@ question_notebook/
 │   └── index.html         # Web 前端页面
 ├── schema.sql             # SQLite 表结构定义（建表/索引）
 ├── migrate_to_sqlite.py   # JSON → SQLite 一次性迁移脚本
-├── questions.db           # SQLite 数据库（首次运行自动生成）
-├── .flask_secret          # Flask 会话签名密钥（首次运行自动生成）
-├── .auth_salt             # 密码哈希盐（启用认证后首次运行自动生成）
-├── backups/               # 备份目录（.db 快照，备份时自动创建）
-├── exports/               # CSV 导出目录（导出时自动创建）
+├── test_qn.py             # 37 个自动化测试（数据层 + CLI + Web）
+├── scripts/
+│   └── check_deps.py      # 依赖声明一致性校验（CI 使用）
+├── .github/workflows/
+│   └── ci.yml             # CI：ruff 检查 + 四版本 Python 测试矩阵
+├── pyproject.toml         # 项目配置（依赖 + ruff/pytest/coverage 配置）
+├── requirements.txt       # 运行依赖（Flask）
+├── requirements-dev.txt   # 开发依赖（ruff + pytest + coverage）
+├── .editorconfig          # 编辑器格式约定（缩进/编码/换行符）
+├── .gitignore             # 排除私人数据、缓存与临时产物
+├── .gitmessage            # 提交信息模板
+├── questions.db           # SQLite 数据库（首次运行自动生成，不入版本库）
+├── .flask_secret          # Flask 会话签名密钥（首次运行自动生成，不入版本库）
+├── .auth_salt             # 密码哈希盐（启用认证后自动生成，不入版本库）
+├── .tmp/                  # 测试临时目录（跑测试时自动创建并清理）
+├── backups/               # 备份目录（.db 快照，备份时自动创建，不入版本库）
+├── exports/               # CSV 导出目录（导出时自动创建，不入版本库）
 ├── ROADMAP.md             # 路线图（版本规划与演进方向）
+├── STANDARDS.md           # 工程规范（依赖/风格/测试/CI/提交，含新手解释）
 ├── TUTORIAL.md            # 教学文档（代码讲解 + 动手练习）
 ├── CODE_WIKI.md           # 代码级知识库（模块职责 + 关键函数）
 └── README.md              # 项目文档
@@ -320,6 +364,32 @@ question_notebook/
 | v1.0.0 | 关联与发布（平台化） | 📋 规划中 |
 
 ## 更新日志
+
+### 2026-09-26 · v0.2.2 工程规范化
+
+本次不改变任何功能与启动方式，只补齐工程底座（详细规范见 [STANDARDS.md](STANDARDS.md)）。
+
+**依赖管理**
+- 新增 [pyproject.toml](pyproject.toml)：项目元信息 + 依赖声明 + ruff/pytest/coverage 配置
+- 新增 `requirements.txt`（运行依赖）与 `requirements-dev.txt`（开发依赖），此前项目没有任何依赖清单
+- 新增 [scripts/check_deps.py](scripts/check_deps.py)：校验两个依赖文件的声明一致，CI 每次执行
+
+**代码质量**
+- 引入 ruff 静态检查（规则 E/W/F/I，忽略影响中文可读性的 E501 与测试必需的 E402）
+- 新增 `.editorconfig`：统一缩进（4 空格）、编码（UTF-8）、换行符（LF）
+- 重写 `.gitignore`：分类整理，补齐测试缓存、覆盖率报告、虚拟环境等条目
+
+**测试改进**
+- 修复测试数据落盘位置：由系统临时目录改为项目内 `.tmp/`，**消除了受限环境下的 `PermissionError`**
+  （原实现在沙箱/部分 CI 容器中因系统临时目录不可写而整个测试套件失败）
+- 抽出公共基类 `QuestionNotebookTestCase`：统一临时目录重定向与输出降噪，三个测试类不再重复代码
+- 测试输出自动静音 CLI 菜单打印，结尾输出一行结论（`共 37 项 | 通过 37 项`），结果一眼可见
+- 支持 pytest 与 `python test_qn.py` 两种运行方式，结果一致
+
+**CI 与协作规范**
+- 新增 [.github/workflows/ci.yml](.github/workflows/ci.yml)：ruff 检查 + Python 3.10/3.11/3.12/3.13 四版本测试矩阵，两种运行方式都验证
+- 新增 [STANDARDS.md](STANDARDS.md)：依赖、风格、测试、CI、提交、分支版本、文档规范（含面向新手的名词解释）
+- 新增 `.gitmessage` 提交信息模板，按 Conventional Commits 约定（`feat:` / `fix:` / `docs:` 等）
 
 ### 2026-08-22 · v0.2.1 数据可视化
 

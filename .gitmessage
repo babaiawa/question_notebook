@@ -1,0 +1,33 @@
+# =============================================================================
+# .gitmessage —— 提交信息模板
+#
+# 启用方式（只需配置一次）：
+#     git config commit.template .gitmessage
+# 之后运行 git commit（不加 -m）时，编辑器会自动带上这份提示。
+#
+# 规范全文见 STANDARDS.md 第 5 节。
+# 格式：<类型>(<范围>): <一句话说明>
+# =============================================================================
+
+# -------- 下面这行是标题（必填），50 字以内，中文，动词开头，结尾不加句号 --------
+# 类型从这些里选一个：feat fix docs style refactor perf test build ci chore
+# 范围（可省略）：models / cli / web / test / docs / ci
+# 示例：
+#   feat(web): 新增按月趋势折线图
+#   fix(models): 损坏库备份前先关闭连接
+#   docs: 补充局域网部署说明
+
+<类型>(<范围>): <一句话说明>
+
+# -------- 正文（可选）：写"为什么改"，而不是"改了哪些行"（代码本身能说明）--------
+# 每行控制在 72 字以内。
+
+# -------- 页脚（可选）：关联的 issue 或破坏性变更，例如 --------
+# Refs: #12
+# BREAKING CHANGE: /api/export 改为 POST
+
+# -------- 提交前请确认（详见 STANDARDS.md 第 10 节）--------
+# [ ] python test_qn.py 全部通过（当前基线 37 项）
+# [ ] 改了依赖 → 已同步 pyproject.toml 与 requirements.txt
+# [ ] 修了 bug → 已补复现用的测试用例
+# [ ] git status 中没有 questions.db / .flask_secret 等私人数据

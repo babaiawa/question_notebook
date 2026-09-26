@@ -2,7 +2,7 @@
 
 > 本文档是 Question Notebook（问题笔记本）项目的**代码级知识库**，面向开发者/维护者，系统梳理项目架构、模块职责、关键类与函数、依赖关系与运行方式。
 >
-> 配套文档：[README.md](README.md)（项目说明）· [TUTORIAL.md](TUTORIAL.md)（教学讲解）· [ROADMAP.md](ROADMAP.md)（路线图）
+> 配套文档：[README.md](README.md)（项目说明）· [TUTORIAL.md](TUTORIAL.md)（教学讲解）· [ROADMAP.md](ROADMAP.md)（路线图）· [STANDARDS.md](STANDARDS.md)（工程规范：依赖 / 风格 / 测试 / CI / 提交）
 
 ---
 
@@ -34,7 +34,8 @@ Question Notebook 是一个**轻量级个人问题记录与知识管理工具**�
 | 分层架构 | 数据层（`models.py`）与界面层（CLI / Web）解耦 |
 | 存储方式 | 本地 SQLite 数据库（`questions.db`），单文件零配置，事务保证一致性 |
 | 技术栈 | Python 3.10+ 标准库 + Flask（仅 Web 端需要） |
-| 测试 | 标准库 `unittest`，测试数据隔离到临时目录 |
+| 测试 | 标准库 `unittest` 编写，`pytest` 与 `python test_qn.py` 两种方式均可运行（37 用例），测试数据隔离到项目内 `.tmp/` |
+| 工程规范 | `pyproject.toml` 声明依赖并集中 ruff / pytest / coverage 配置，配套 `requirements*.txt` 与 GitHub Actions CI（详见 [STANDARDS.md](STANDARDS.md)） |
 
 ---
 
@@ -55,14 +56,26 @@ question_notebook/
 ├── .auth_salt             # 密码哈希盐（启用认证后自动生成）
 ├── backups/               # 备份目录（备份时自动创建）
 ├── exports/               # CSV 导出目录（导出时自动创建）
+├── .tmp/                  # 测试临时目录（每个用例自建唯一子目录，已 gitignore）
+├── pyproject.toml         # 项目元数据 + 依赖声明（权威来源）+ ruff/pytest/coverage 配置
+├── requirements.txt       # 运行依赖清单（Flask>=2.3）
+├── requirements-dev.txt   # 开发依赖清单（ruff / pytest / coverage）
+├── scripts/
+│   └── check_deps.py      # 校验 pyproject.toml 与 requirements.txt 的依赖声明一致
+├── .github/
+│   └── workflows/
+│       └── ci.yml         # CI 流水线：ruff 检查 + 依赖一致性校验 + Python 3.10~3.13 测试矩阵
+├── .editorconfig          # 编辑器统一格式约定（缩进 / 编码 / 换行符）
+├── .gitmessage            # Git 提交信息模板
 ├── README.md              # 项目说明文档
 ├── TUTORIAL.md            # 教学文档
 ├── ROADMAP.md             # 路线图
+├── STANDARDS.md           # 工程规范手册（依赖 / 风格 / 测试 / CI / 提交）
 ├── CODE_WIKI.md           # 代码级知识库（本文档）
 └── .gitignore             # Git 忽略规则
 ```
 
-> 运行期动态生成的目录和文件（`backups/`、`exports/`、`.flask_secret`、`.auth_salt`、损坏文件的 `.bak`）不在版本控制中。
+> 运行期动态生成的目录和文件（`backups/`、`exports/`、`.tmp/`、`.flask_secret`、`.auth_salt`、损坏文件的 `.bak`）不在版本控制中。
 
 ---
 
@@ -93,7 +106,7 @@ question_notebook/
 
 1. **单一职责**：数据层只负责"数据长什么样、怎么存取"；界面层只负责输入输出、菜单、路由。
 2. **依赖单向**：界面层依赖数据层，数据层不依赖任何界面实现。
-3. **存储隔离**：文件读写集中在 `models.py`，未来迁移到 SQLite/PostgreSQL 时界面层零改动。
+3. **存储隔离**：数据库读写集中在 `models.py`，未来若迁移到 PostgreSQL 等其他数据库时界面层零改动。
 
 **分层带来的收益：** CLI 与 Web 共享同一份数据逻辑，改 bug 只改一处；同一份 `questions.db` 在两个界面间数据完全互通。
 
@@ -110,6 +123,11 @@ question_notebook/
 | `web_app.py` | 界面层（Web） | Flask 应用、REST 路由、密码认证、CSRF 防护、HTTP 请求校验与响应、导出/备份/恢复接口 |
 | `templates/index.html` | 界面层（前端） | 浏览器渲染、登录页、`fetch` 调用 API、搜索筛选、模态框交互 |
 | `test_qn.py` | 测试层 | 数据层、CLI 层与 Web 层（含认证与 CSRF）的自动化测试，测试数据隔离 |
+| `pyproject.toml` | 工程配置 | 项目元数据、运行/开发依赖声明（权威来源）、ruff / pytest / coverage 配置 |
+| `requirements.txt` / `requirements-dev.txt` | 工程配置 | 依赖清单简写：运行依赖（Flask）与开发依赖（ruff / pytest / coverage） |
+| `scripts/check_deps.py` | 工程工具 | 比对 `pyproject.toml` 与 `requirements.txt` 的依赖包名是否一致，不一致退出码 1（CI 调用） |
+| `.github/workflows/ci.yml` | 工程配置 | CI：ruff 检查、依赖一致性校验、Python 3.10/3.11/3.12/3.13 矩阵测试 |
+| `STANDARDS.md` | 文档 | 工程规范手册（依赖 / 风格 / 测试 / CI / 提交 / 版本约定） |
 
 ### 4.2 依赖关系图
 
@@ -149,7 +167,9 @@ web_app.py ───────────────────────
 | `EXPORT_DIR` | 常量 | CLI、测试 |
 | `DEFAULT_CATEGORY` | 常量 | CLI、Web、测试 |
 
-> ⚠️ **值拷贝陷阱**：CLI/Web 用 `from models import DATA_FILE` 拿到的是字符串值拷贝，而非引用。测试重定向数据路径时，必须**同时**更新 `models.DATA_FILE` 与 `cli.DATA_FILE`（含 `BASE_DIR`，见 `test_qn.py` 的 `setUp`）。
+> ⚠️ **值拷贝陷阱（已修正）**：`from models import ...` 只导入**函数**，拿到的是函数对象引用；而路径常量（`DATA_FILE` / `BACKUP_DIR` / `EXPORT_DIR` / `BASE_DIR`）在 `question_notebook.py` 中一律通过 `models.DATA_FILE`、`models.BACKUP_DIR` 等**模块属性**在调用时动态读取（见 `question_notebook.py` 的 `import models` 及各函数体），`web_app.py` 则不直接引用路径常量。
+>
+> 因此测试只需重定向 **`models` 模块命名空间中的四个路径常量**（见 `test_qn.py` 基类 `QuestionNotebookTestCase.setUp`），**不存在"必须同时更新 `cli.DATA_FILE`"的双边同步要求**——`cli` 模块并不持有这些常量的值拷贝。
 
 ---
 
@@ -511,9 +531,23 @@ drawCharts(stats) → drawCategoryChart(byCategory) + drawSolveChart(stats)
 
 ### 5.5 test_qn.py（测试层）
 
-使用标准库 `unittest`，`setUp` 将数据路径重定向到临时目录（`tempfile.mkdtemp`），`tearDown` 清理，保证不污染真实数据。
+使用标准库 `unittest` 编写，三种测试类（数据层 / CLI / Web）全部继承公共基类 `QuestionNotebookTestCase`。运行方式支持 `pytest` 与 `python test_qn.py` 两种（结果一致），当前基线 **37 个用例全部通过**。规范细节见 [STANDARDS.md](STANDARDS.md) 第 3 节。
 
-#### `TestModels(unittest.TestCase)` — 数据层测试
+#### 公共基类 `QuestionNotebookTestCase(unittest.TestCase)`
+
+所有测试类的公共父类，负责**数据隔离**与**输出降噪**：
+
+| 方法 / 辅助 | 行为 |
+|------|------|
+| `_make_test_tmpdir()`（模块级函数） | 在项目内 `.tmp/` 下用 `os.makedirs` + `uuid.uuid4().hex[:8]` 随机后缀创建唯一临时目录，返回绝对路径；**刻意不用 `tempfile.mkdtemp()`** |
+| `setUp()` | 调用 `_make_test_tmpdir()` 得到 `self.tmpdir`，重定向 `models.BASE_DIR` / `models.DATA_FILE` / `models.BACKUP_DIR` / `models.EXPORT_DIR`；再用 `contextlib.redirect_stdout(io.StringIO())` 静音标准输出，避免 CLI 菜单打印刷屏 |
+| `tearDown()` | 退出 stdout 重定向上下文，`shutil.rmtree(self.tmpdir, ignore_errors=True)` 删除临时目录（用例失败也一定执行） |
+
+> ⚠️ **为什么不用系统临时目录**：原实现用 `tempfile.mkdtemp()` 把测试数据写到系统临时目录（Windows 为 `%TEMP%`）。沙箱 / 受限 CI 环境下系统临时目录不可写，且部分沙箱会拦截对 `mkdtemp` 所建目录的后续写入，导致 `.data.lock` 报 `PermissionError`。现改为项目内 `.tmp/`（已 gitignore，用例结束自动删除，不污染系统盘）；仅当 `.tmp/` 本身不可写（如只读介质）时，才退回 `tempfile.mkdtemp(prefix="qn_test_")` 兜底。
+
+> 由于 CLI 通过 `models.*` 模块属性在调用时读取路径（见 §4.3），基类**只重定向 `models` 一处**即可让数据层、CLI 层、Web 层测试全部落到同一临时目录，无需双边同步。
+
+#### `TestModels(QuestionNotebookTestCase)` — 数据层测试
 
 | 用例 | 覆盖点 |
 |------|--------|
@@ -530,7 +564,7 @@ drawCharts(stats) → drawCategoryChart(byCategory) + drawSolveChart(stats)
 | `test_get_stats` | `get_stats` 空库返回零结构；构造 3 条问题跨 2 个分类（Bug x2 含 1 已解决、文档 x1 已解决），校验 total/solved/open/solve_rate=2/3、by_category 按 total DESC（Bug 在前）排序、by_month 各月之和等于 total |
 | `test_get_stats_corrupt_db` | 写入非 SQLite 内容，校验 `get_stats` 返回零结构且不抛异常 |
 
-#### `TestCLI(unittest.TestCase)` — CLI 层测试
+#### `TestCLI(QuestionNotebookTestCase)` — CLI 层测试
 
 | 用例 | 覆盖点 |
 |------|--------|
@@ -541,9 +575,9 @@ drawCharts(stats) → drawCategoryChart(byCategory) + drawSolveChart(stats)
 | `test_multi_keyword_search` | 多关键词 AND 搜索 |
 | `test_refresh_syncs_from_disk` | `_refresh` 从磁盘同步 Web 端写入的最新数据 |
 
-#### `TestWeb(unittest.TestCase)` — Web 层测试（Flask test_client，含认证与 CSRF）
+#### `TestWeb(QuestionNotebookTestCase)` — Web 层测试（Flask test_client，含认证与 CSRF）
 
-用 `HAS_FLASK` 标志跳过（未装 Flask 时不影响数据层/CLI 测试）。`setUp` 用 test_client 建立会话并取 CSRF token，通过 `_csrf_json` / `_csrf_put_json` / `_csrf_delete` 辅助方法在请求里带 `X-CSRF-Token` 头。
+用 `HAS_FLASK` 标志跳过（未装 Flask 时不影响数据层/CLI 测试）。`setUpClass` 设置 `app.config["TESTING"] = True` 并缓存 `test_client`；`setUp` 先调用 `super().setUp()` 完成临时目录重定向，再新建 test_client、`GET /api/csrf` 建立会话并取 CSRF token，通过 `_csrf_json` / `_csrf_put_json` / `_csrf_delete` 辅助方法在请求里带 `X-CSRF-Token` 头。
 
 | 类别 | 用例 | 覆盖点 |
 |------|------|--------|
@@ -710,8 +744,10 @@ CREATE INDEX IF NOT EXISTS idx_questions_timestamp ON questions(timestamp);
 
 | 依赖 | 版本 | 用途 | 所属模块 |
 |------|------|------|---------|
-| Python | 3.10+ | 运行环境 | 全部 |
-| Flask | 3.x | Web 框架（仅 Web 端需要） | `web_app.py` |
+| Python | ≥ 3.10（CI 覆盖 3.10 / 3.11 / 3.12 / 3.13） | 运行环境 | 全部 |
+| Flask | `Flask>=2.3`（实际会装最新 3.x） | Web 框架（仅 Web 端需要）；`app.json.ensure_ascii` 需 2.3+ | `web_app.py` |
+
+> **声明位置（两处，必须一致）**：运行依赖同时声明在 `pyproject.toml` 的 `[project] dependencies`（**权威来源**）与 `requirements.txt`（等值简写）；开发工具依赖同时声明在 `[project.optional-dependencies] dev` 与 `requirements-dev.txt`。`scripts/check_deps.py` 负责比对两处包名是否一致（不一致则退出码 1），CI 每次都会运行它。规则详见 [STANDARDS.md](STANDARDS.md) 第 1 节。
 
 标准库（无需额外安装）：
 
@@ -730,16 +766,33 @@ CREATE INDEX IF NOT EXISTS idx_questions_timestamp ON questions(timestamp);
 | `hmac` | 防时序攻击的常量时间比较 | `web_app.py` |
 | `secrets` | 会话密钥与 CSRF token 生成 | `web_app.py` |
 
-### 9.2 测试依赖
+### 9.2 测试与工程工具依赖
+
+`test_qn.py` 只依赖标准库（无需安装任何第三方包即可运行：`python test_qn.py`）：
 
 | 模块 | 用途 |
 |------|------|
-| `unittest` | 测试框架 |
+| `unittest` | 测试框架（基类 `QuestionNotebookTestCase` 继承 `unittest.TestCase`） |
 | `unittest.mock.patch` | 模拟 `input()` 输入 |
-| `tempfile` | 临时目录隔离测试数据 |
-| `sys` | 路径注入 |
+| `os` / `shutil` | 创建与删除项目内 `.tmp/` 测试临时目录 |
+| `uuid` | 生成临时目录的随机后缀（`uuid4().hex[:8]`） |
+| `contextlib` / `io` | `redirect_stdout(io.StringIO())` 静音测试期标准输出 |
+| `tempfile` | 仅在 `.tmp/` 不可写时兜底（`tempfile.mkdtemp(prefix="qn_test_")`） |
+| `sys` | 路径注入（`sys.path.insert`）与 `sys.exit` 退出码 |
 
-> 项目无 `requirements.txt`，唯一需要手动安装的第三方依赖是 Flask：`pip install flask`。
+可选工具依赖（装了就更好用，不装也能跑）：
+
+| 工具 | 声明版本 | 用途 |
+|------|---------|------|
+| `pytest` | `pytest>=7.0` | 测试运行器：输出更清晰，支持 `-k` 筛选 / `--lf` 重跑失败项 |
+| `ruff` | `ruff>=0.6` | 代码检查 + 格式化（配置见 `pyproject.toml` 的 `[tool.ruff]`） |
+| `coverage` | `coverage>=7.0` | 覆盖率统计（配置见 `[tool.coverage.*]`） |
+
+> ⚠️ **已修正**：项目**现在有**依赖清单文件，不再是"无 `requirements.txt`、手动 `pip install flask`"：
+>
+> - 运行时（普通用户）：`pip install -r requirements.txt`（`requirements.txt` 内容即 `Flask>=2.3`）
+> - 开发/测试：`pip install -r requirements-dev.txt`（或用 `pip install -e ".[dev]"`）
+> - 依赖一致性与安装方式的完整说明见 [STANDARDS.md](STANDARDS.md) 第 1 节。
 
 ---
 
@@ -748,12 +801,17 @@ CREATE INDEX IF NOT EXISTS idx_questions_timestamp ON questions(timestamp);
 ### 10.1 环境准备
 
 ```bash
-# 要求 Python 3.10+
+# 要求 Python 3.10+（CI 在 3.10 / 3.11 / 3.12 / 3.13 上测试）
 python --version
 
-# Web 版需安装 Flask
-pip install flask
+# 安装运行依赖（只有 Flask，版本 >=2.3）
+pip install -r requirements.txt
+
+# 开发/测试额外安装工具（ruff / pytest / coverage）
+pip install -r requirements-dev.txt
 ```
+
+> 依赖同时声明在 `pyproject.toml` 与 `requirements*.txt` 两处，改依赖需同步修改两处；可用 `python scripts/check_deps.py` 校验一致性（详见 [STANDARDS.md](STANDARDS.md) 第 1 节）。
 
 ### 10.2 启动 CLI
 
@@ -783,9 +841,23 @@ $env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python web_app.py
 
 ### 10.4 运行测试
 
+两种方式都支持，结果一致（当前 37 个用例）：
+
 ```bash
+# 方式一：零依赖，只用标准库（无需安装 pytest）
 python test_qn.py
+
+# 方式二：装了 pytest 后（推荐，输出更清晰，支持筛选 / 重跑失败项）
+pytest
 ```
+
+`python test_qn.py` 会用一个自定义 `unittest.TextTestRunner`（`verbosity=2, buffer=False`）运行全部用例，并在最后打印一行中文汇总，例如：
+
+```text
+测试结果：共 37 项 | 通过 37 项 | 失败 0 项 | 错误 0 项 | 跳过 0 项
+```
+
+任一用例失败或报错时进程退出码为 1（全绿为 0），可直接用于脚本/CI 判定。
 
 ### 10.5 首次运行行为
 
@@ -797,13 +869,19 @@ python test_qn.py
 
 ## 11. 测试说明
 
-- **入口**：`python test_qn.py`（`unittest` 默认发现并运行全部用例，`verbosity=2`）。
-- **测试隔离**：`setUp` 将 `models` 与 `cli` 的 `BASE_DIR`/`DATA_FILE`/`BACKUP_DIR`/`EXPORT_DIR` 重定向到临时目录（`tempfile.mkdtemp`，其中 `models.DATA_FILE = os.path.join(tmpdir, "questions.db")`），`tearDown` 删除，不会读写真实 `questions.db`。`BASE_DIR` 必须一并重定向——恢复路径中 `tempfile.mkstemp(dir=BASE_DIR)` 生成的临时文件须与目标同目录，跨卷 `os.replace` 会失败。
+- **入口**：`pytest` 或 `python test_qn.py`——两种方式结果一致（37 用例全绿）。前者需装 `pytest`（`pip install -r requirements-dev.txt`），后者只用标准库。规范细节见 [STANDARDS.md](STANDARDS.md) 第 3 节。
+- **测试基类**：全部三个测试类继承 `QuestionNotebookTestCase(unittest.TestCase)`，公共逻辑集中在基类，用例只关心断言。
+  - `TestModels`（数据层 12 例）、`TestCLI`（CLI 层 6 例）、`TestWeb`（Web 层 19 例）均写作 `class Xxx(QuestionNotebookTestCase)`。
+  - `TestWeb` 额外实现 `setUpClass`（`app.config["TESTING"] = True` + 缓存 test_client）并覆写 `setUp`，先 `super().setUp()` 再做 CSRF 会话准备。
+- **测试隔离**：基类 `setUp` 调用模块级辅助函数 `_make_test_tmpdir()`，在项目内 `.tmp/` 下用 `os.makedirs` + `uuid4().hex[:8]` 随机后缀创建**唯一**临时目录，并重定向 `models.BASE_DIR` / `models.DATA_FILE`（`os.path.join(tmpdir, "questions.db")`）/ `models.BACKUP_DIR` / `models.EXPORT_DIR` 四个路径常量；`tearDown` 用 `shutil.rmtree(..., ignore_errors=True)` 删除，绝不读写真实 `questions.db`。`BASE_DIR` 一并重定向是必需的——恢复路径中 `tempfile.mkstemp(dir=BASE_DIR)` 生成的临时文件须与目标同目录，跨卷 `os.replace` 会失败。
+- **输出降噪**：基类 `setUp` 进入 `contextlib.redirect_stdout(io.StringIO())` 上下文，CLI 菜单与提示语全部写入内存缓冲区，不再刷屏（`print` 的执行本身不受影响）；`tearDown` 退出该上下文恢复标准输出。
 - **输入模拟**：用 `unittest.mock.patch('builtins.input', side_effect=[...])` 依次提供模拟输入。
 - **覆盖范围**：数据层 12 个用例（含 `get_stats` 相关 2 例） + CLI 层 6 个用例 + Web 层 19 个用例（含 `test_stats_endpoint`，含认证与 CSRF），共 **37 个用例**。
 
-> ⚠️ 测试依赖 `from models import ...` 的值拷贝特性，路径常量必须**双边同步更新**（`models.DATA_FILE = cli.DATA_FILE = ...`），否则会误读写真实数据文件。
+> ⚠️ **已修正（原文档此处有误）**：不需要"双边同步更新 `models.DATA_FILE` 与 `cli.DATA_FILE`"。`question_notebook.py` 用 `import models` 并通过 `models.DATA_FILE` / `models.BACKUP_DIR` / `models.EXPORT_DIR` 在调用时读取路径（`from models import ...` 只导入函数与 `DEFAULT_CATEGORY`），因此基类**只重定向 `models` 模块的属性**即可，`cli` 模块并不持有这些常量的副本。
+
+> ⚠️ **也不要改回 `tempfile.mkdtemp()` 写系统临时目录**：受限沙箱 / 部分 CI 容器里系统临时目录不可写、且部分沙箱拦截对 `mkdtemp` 目录的写入，会直接报 `PermissionError: ... .data.lock`。`.tmp/` 已在 `.gitignore` 中，保留"项目内自建目录 + 失败时 `tempfile.mkdtemp` 兜底"的现设计。踩坑记录见 [STANDARDS.md](STANDARDS.md) 第 3.4 节。
 
 ---
 
-> 本文档基于源码 v0.2.1（2026-08-22）生成，如代码结构变更请同步更新。
+> 本文档基于源码 v0.2.1 生成，并已同步「工程标准化」改造（`pyproject.toml` / `requirements*.txt` / 共享测试基类 / pytest 双入口 / CI / `STANDARDS.md`）；如代码结构变更请同步更新。

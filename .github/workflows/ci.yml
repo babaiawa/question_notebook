@@ -1,0 +1,99 @@
+# =============================================================================
+# .github/workflows/ci.yml —— CI（持续集成）自动检查流水线
+#
+# 名词解释（给新手）：
+#   CI = Continuous Integration，持续集成。说人话：**每次你把代码推到 GitHub，
+#   云端机器人自动帮你跑一遍代码检查和全部测试，挂了就在页面上标红 ❌**。
+#   好处是你不用记得"改完代码要自己跑测试"，漏跑也会被机器抓住。
+#
+# 触发时机（on）：
+#   - push：向 main 分支推送代码时
+#   - pull_request：有人提 PR（合并请求）时
+#   - workflow_dispatch：手动点按钮触发（GitHub 页面上有 Run workflow 按钮）
+#
+# 两个并行任务（jobs）：
+#   lint  代码检查：用 ruff 挑出写法问题（不跑程序）
+#   test  自动测试：在 Python 3.10 / 3.11 / 3.12 / 3.13 四个版本上各跑一遍 37 个用例
+#
+# 为什么测试要跑四个 Python 版本？
+#   确保项目在「声称支持的所有版本」上都能跑，而不是只在你自己电脑那个版本上好使。
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:  # 允许在 GitHub 网页上手动点按钮运行
+
+# 同一分支连续推送时，取消上一次还没跑完的任务，节省时间
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 任务一：代码检查（ruff）
+  # ---------------------------------------------------------------------------
+  lint:
+    name: 代码检查（ruff）
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装 ruff
+        run: pip install "ruff>=0.6"
+
+      # 只检查，不自动改代码：CI 的职责是"发现问题"，不是"偷偷改你的代码"
+      - name: 运行 ruff 检查
+        run: ruff check --output-format=github .
+
+      # 校验 requirements.txt 与 pyproject.toml 里的依赖声明一致，
+      # 防止"改了依赖只改一处"导致两边说法不一样。脚本也能在本机手动运行。
+      - name: 校验依赖声明一致性
+        run: python scripts/check_deps.py
+
+  # ---------------------------------------------------------------------------
+  # 任务二：自动测试（多 Python 版本矩阵）
+  # ---------------------------------------------------------------------------
+  test:
+    name: 自动测试（Python ${{ matrix.python-version }}）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false  # 某个版本失败时，其他版本继续跑完，一次看清全部问题
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    # 让测试里的中文输出不乱码（GitHub Actions 默认编码不一定是 UTF-8）
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip  # 缓存依赖下载，加快后续运行速度
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: 用 pytest 运行测试
+        run: pytest -v
+
+      - name: 兼容性验证：直接运行测试文件（不依赖 pytest 也能跑）
+        run: python test_qn.py
