@@ -4,17 +4,21 @@
 
 本教程以 Question Notebook 项目为教材，按「先跑起来 → 看懂每一层 → 动手改」的顺序，把整个项目的逻辑和代码讲透。**建议边读边对着源码看**，每读一段就打开对应文件核对一遍，这样理解最扎实。
 
+> 📐 本教程讲「代码为什么这么写」；项目的工程规矩（依赖、代码风格、测试要求、提交格式）在 [STANDARDS.md](STANDARDS.md)。
+> 词汇表式的速查在每课末尾和 [CODE_WIKI.md](CODE_WIKI.md)。
+
 ---
 
 ## 目录
 
 - [第 0 课：先跑起来，建立整体印象](#第-0-课先跑起来建立整体印象)
 - [第 1 课：数据层 models.py —— 数据怎么存](#第-1-课数据层-modelspy--数据怎么存)
-- [第 2 课：CLI 层 question_notebook.py —— 命令行怎么交互](#第-2-课-cli-层-question_notebookpy--命令行怎么交互)
-- [第 3 课：Web 层 web_app.py —— 从命令行到网页](#第-3-课-web-层-web_apppy--从命令行到网页)
+- [第 2 课：CLI 层 cli.py —— 命令行怎么交互](#第-2-课cli-层-clipy--命令行怎么交互)
+- [第 3 课：Web 层 web.py —— 从命令行到网页](#第-3-课web-层-webpy--从命令行到网页)
 - [第 4 课：架构思想与并发安全](#第-4-课架构思想与并发安全)
-- [第 5 课：自动化测试 test_qn.py](#第-5-课自动化测试-test_qnpy)
+- [第 5 课：自动化测试](#第-5-课自动化测试)
 - [第 6 课：动手练习](#第-6-课动手练习)
+- [附：包与导入速查表](#附包与导入速查表)
 - [学习路线建议](#学习路线建议)
 
 ---
@@ -25,12 +29,12 @@
 
 Question Notebook 是一个「问题笔记本」：记录你学习、工作中遇到的问题，标记是否解决、写下解决方案、分类归档，还支持搜索、备份、导出 CSV。
 
-它有两个入口，操作的是**同一份数据**：
+它有两个界面，操作的是**同一份数据**：
 
-| 入口 | 启动命令 | 面向 |
+| 界面 | 启动命令（未安装时） | 面向 |
 |------|---------|------|
-| 命令行（CLI） | `python question_notebook.py` | 键盘交互，菜单式 |
-| 网页（Web） | `python web_app.py` | 浏览器点击，界面式 |
+| 命令行（CLI） | `python run_cli.py` | 键盘交互，菜单式 |
+| 网页（Web） | `python run_web.py` | 浏览器点击，界面式 |
 
 ### 0.2 先跑一次
 
@@ -39,13 +43,13 @@ Question Notebook 是一个「问题笔记本」：记录你学习、工作中�
 python --version
 
 # 2. 装依赖（本项目运行只需要 Flask 一个包，清单写在 requirements.txt）
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
-# 3. 跑命令行版
-python question_notebook.py
+# 3. 跑命令行版（在项目根目录执行）
+python run_cli.py
 
 # 4. 跑网页版
-python web_app.py
+python run_web.py
 # 浏览器打开 http://127.0.0.1:5000
 ```
 
@@ -53,49 +57,186 @@ python web_app.py
 
 ```bash
 # Linux / macOS
-QUESTION_NOTEBOOK_PASSWORD=123456 python web_app.py
+QUESTION_NOTEBOOK_PASSWORD=123456 python run_web.py
 
 # Windows PowerShell
-$env:QUESTION_NOTEBOOK_PASSWORD="123456"; python web_app.py
+$env:QUESTION_NOTEBOOK_PASSWORD="123456"; python run_web.py
 ```
 
 ### 0.3 项目文件结构
 
+这是重组后的结构。注意一个关键变化：**代码集中放在 `src/` 下，而数据留在根目录**。
+
 ```
-question_notebook/
-├── models.py              # 数据层：数据长什么样、怎么读写 SQLite
-├── question_notebook.py   # CLI 界面层：命令行菜单、输入输出
-├── web_app.py             # Web 界面层：Flask 路由、认证、CSRF
-├── templates/
-│   └── index.html         # Web 前端页面（HTML + CSS + JS）
-├── test_qn.py             # 自动化测试（37 个用例）
-├── schema.sql             # SQLite 表结构定义（建表/索引）
-├── migrate_to_sqlite.py   # 旧版 JSON → SQLite 一次性迁移脚本
-├── questions.db           # SQLite 数据库（首次运行自动生成，不入版本库）
-├── pyproject.toml         # 项目配置：依赖声明 + ruff/pytest 配置
-├── requirements.txt       # 运行依赖清单（只有 Flask）
-├── requirements-dev.txt   # 开发依赖清单（ruff / pytest / coverage）
-└── ...（STANDARDS / README / TUTORIAL / ROADMAP / CODE_WIKI 等文档）
+question_notebook/                    ← 项目根目录（你 clone 下来的地方）
+│
+├── run_cli.py                        ← 启动入口：命令行版
+├── run_web.py                        ← 启动入口：网页版
+├── conftest.py                       ← pytest 的初始化（把 src/ 加进搜索路径）
+│
+├── src/question_notebook/            ← 【代码包】真正的程序代码都在这里
+│   ├── __init__.py                   ← 包的"身份证"：说明这个包是什么 + 版本号
+│   ├── __main__.py                   ← 让 `python -m question_notebook` 能运行
+│   ├── paths.py                      ← 路径解析：数据放哪，只有这一处说了算
+│   ├── models.py                     ← 数据层：数据长什么样、怎么读写 SQLite
+│   ├── cli.py                        ← 界面层：命令行菜单、输入输出
+│   ├── web.py                        ← 界面层：Flask 路由、认证、CSRF
+│   ├── schema.sql                    ← SQLite 表结构定义（建表/索引）
+│   └── templates/
+│       └── index.html                ← Web 前端页面（HTML + CSS + JS）
+│
+├── tests/
+│   └── test_question_notebook.py     ← 自动化测试（37 个用例）
+├── scripts/
+│   ├── check_deps.py                 ← 校验依赖声明一致（CI 用）
+│   └── migrate_to_sqlite.py          ← 旧版 JSON → SQLite 一次性迁移脚本
+│
+├── questions.db                      ← 【你的数据】SQLite 数据库（不入版本库）
+├── backups/  exports/  .tmp/         ← 运行时自动生成（不入版本库）
+│
+├── pyproject.toml                    ← 项目身份证：依赖 + 工具配置 + 启动命令
+├── requirements.txt                  ← 运行依赖清单（只有 Flask）
+├── requirements-dev.txt              ← 开发依赖清单（ruff / pytest / coverage）
+└── ...（README / TUTORIAL / ROADMAP / CODE_WIKI / STANDARDS 等文档）
 ```
+
+**为什么要分「src/」和「根目录」？** 这是本课最重要的一节，见 0.5。
 
 ### 0.4 整体架构一句话
 
 程序分成**三层**，依赖方向自上而下，单向流动：
 
 ```
-界面层（CLI / Web）  ──调用──▶  数据层（models.py）
+界面层（cli.py / web.py）  ──调用──▶  数据层（models.py）  ──读写──▶  questions.db
+                                              ▲
+                                              │ 路径从哪来？
+                                          paths.py
 ```
 
 - **数据层**只管「数据是什么、怎么存到数据库」，不知道界面长什么样。
 - **界面层**只管「怎么展示、怎么接收输入」，读写数据一律调用数据层。
+- **paths.py** 是个"基础服务"：告诉别人数据文件在哪，大家都问它。
 
 这样设计的好处：CLI 和 Web 共用同一套数据逻辑，改 bug 只改一处；以后把 SQLite 换成 PostgreSQL，界面层一行都不用改。
+
+### 0.5 看懂新结构：什么是「包」，Python 又怎么找到代码
+
+这一节解决初学 Python 最常见的困惑之一：**为什么我的代码明明写对了，却报 `ModuleNotFoundError`？**
+
+#### 名词一：模块（module）与包（package）
+
+| 名词 | 说人话 | 本项目里 |
+|------|--------|---------|
+| **模块** | 一个 `.py` 文件就是一个模块 | `models.py` 是一个模块 |
+| **包** | 一个**文件夹**，里面有 `__init__.py`，把若干模块组织在一起 | `src/question_notebook/` 是一个包 |
+
+包的作用是**给模块起一个姓氏**。想象一个学校：光喊「小明」可能有三个人回头；喊「三年二班的小明」就唯一了。包名就是那个「班级」。
+
+所以导入写法分两种：
+
+```python
+# 绝对导入：从最外层写完整路径（"班级 + 姓名"）
+from question_notebook import cli
+
+# 相对导入：. 表示"当前这个包"（同一个班里的同学，不用报班级名）
+from . import models
+from .paths import DATA_FILE
+```
+
+**规则（本项目就是这么定的）**：
+
+- 包**内部**模块互相引用 → 用相对导入（`from . import models`）。
+  好处：将来包改名，内部引用不用动；也不会和标准库/第三方包撞名。
+- 包**外部**（测试、脚本）引用本包 → 用绝对导入（`from question_notebook import cli`）。
+
+#### 名词二：`sys.path` —— Python 的「找人名单」
+
+当你写 `import question_notebook`，Python 会去一串目录里逐个找这个名字，这串目录就是 `sys.path`。可以把它理解为 Python 手里的**联系人名单**，名单上没有的，它就当这个人不存在，于是：
+
+```
+ModuleNotFoundError: No module named 'question_notebook'
+```
+
+默认名单里有：当前工作目录、Python 安装目录、已安装的第三方包目录。**注意：没有 `src/`。**
+
+#### 名词三：src 布局 —— 为什么代码要藏进 src/
+
+把代码放进 `src/question_notebook/` 而不是直接放根目录，这个约定叫 **src 布局（src layout）**，是现代 Python 项目的推荐做法。好处有两个：
+
+1. **根目录整洁**：根目录只剩下"项目级"的东西——配置文件、文档、测试、你的数据。一眼就能看出这是个什么项目。
+2. **更早发现打包错误**：src 布局下，不安装就 `import` 不到自己的包，这逼着你走正规的安装流程。如果在根目录平铺，你能 import 到只是因为"恰好站在那个目录里"，等真正打包给别人用时才发现文件没打进去——那时候排查就痛苦了。
+
+代价是：**src 布局下，未安装时不能直接 `python -m question_notebook`**，因为 `src/` 不在名单上。
+
+#### 三种启动方式：本项目怎么解决"未安装也要能跑"
+
+| 方式 | 命令 | 前提 | 适合谁 |
+|------|------|------|--------|
+| **① 启动脚本**（推荐新手） | `python run_cli.py`<br>`python run_web.py` | 只需装 Flask | 刚克隆下来，想立刻用 |
+| **② 模块方式** | `python -m question_notebook`<br>`python -m question_notebook.web` | 需先安装（或 src 已在名单上） | 已按规范安装的人 |
+| **③ 控制台命令** | `question-notebook`<br>`question-notebook-web` | 需先 `pip install -e .` | 装好后日常使用 |
+
+小知识：`python -m 某包` 里的 `-m` 意思是"把某个包/模块当程序运行"。执行 `python -m question_notebook` 时，Python 会去找该包里的 `__main__.py` 运行——这就是它存在的意义（见项目里的 `src/question_notebook/__main__.py`）。
+
+三种方式**最终都调用同一个函数**（CLI 都是 `question_notebook.cli.main`，Web 都是 `question_notebook.web.main`），所以行为完全一致，不会出现"换个启动方式结果不一样"的问题。
+
+#### `run_cli.py` 到底做了什么？
+
+它只有十来行，核心就是"把 src/ 加进名单，然后交班"：
+
+```python
+import os
+import sys
+
+# 项目根目录 = 本文件所在目录；代码在它下面的 src/
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+
+# 把 src/ 插进"找人名单"最前面
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+# 名单更新后才能成功导入包（所以这行必须在上面之后）
+from question_notebook.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    main()
+```
+
+两个工程细节值得记住：
+
+1. **`sys.path.insert(0, ...)` 里的 `0`** 表示插到名单**最前面**，确保优先用本仓库的代码，而不是碰巧装了同名的第三方包。
+2. **`# noqa: E402` 是什么？** `E402` 是代码检查工具 ruff 的一条规则："import 必须写在文件最顶部"。这里我们**故意违反**它——因为 `sys.path.insert` 必须先执行、import 必须后执行，顺序不能换。`# noqa: E402` 是明确告诉检查工具"这行我知道，是特例，请放过"。**这比默默关掉整条规则好**：只对具体行豁免，其他地方照样检查。
+
+> 同样的"先改名单、再导入"引导，测试文件（`tests/test_question_notebook.py`）、`conftest.py` 和迁移脚本里也各有一份。它们各自独立，都能单独运行。
+
+#### 动手核对（强烈建议做一遍）
+
+打开终端，在项目根目录执行，观察差别：
+
+```bash
+# 直接导入：会失败，因为 src/ 不在名单上
+python -c "import question_notebook"
+
+# 手动把 src/ 加进名单（PYTHONPATH 是给 Python 预设名单的环境变量）
+# Windows PowerShell:
+$env:PYTHONPATH="src"; python -c "import question_notebook; print(question_notebook.__version__)"
+# Linux / macOS:
+PYTHONPATH=src python -c "import question_notebook; print(question_notebook.__version__)"
+
+# 用启动脚本：能跑，因为脚本自己做了上面的引导
+python run_cli.py
+```
+
+看到「会失败 → 加名单 → 成功」这个对比，你就真正理解了 `ModuleNotFoundError` 的来龙去脉——这是新手最常卡住的一道坎。
+
+
 
 ---
 
 ## 第 1 课：数据层 models.py —— 数据怎么存
 
-数据层是理解整个项目的**地基**。先看它，再看界面层就顺了。
+数据层是理解整个项目的**地基**。先看它，再看界面层就顺了。（文件位置：`src/question_notebook/models.py`）
 
 ### 1.1 用类表示「问题」
 
@@ -122,11 +263,13 @@ class Question:
 
 这个项目用 **SQLite** 数据库存储。SQLite 是一个单文件数据库（`questions.db`），不需要安装单独的数据库服务器，Python 标准库自带 `sqlite3` 模块就能用——对个人工具来说几乎是零成本。
 
-> 小历史：v0.1.x 用的是 JSON 文件存储，v0.2.0 迁到了 SQLite。迁移用的是项目里的 `migrate_to_sqlite.py` 脚本，把旧 `questions.json` 一键导入 `questions.db`。表结构定义在 `schema.sql`。
+> 小历史：v0.1.x 用的是 JSON 文件存储，v0.2.0 迁到了 SQLite。迁移用的是项目里的 `scripts/migrate_to_sqlite.py` 脚本，把旧 `questions.json` 一键导入 `questions.db`。表结构定义在 `src/question_notebook/schema.sql`。
 
 ### 1.3 表结构：数据在数据库里长什么样
 
 在关系型数据库里，数据存在**表**里。表就像一张 Excel 表格：每行是一条记录，每列是一个字段。我们的 `questions` 表有 7 列：
+
+> 建表语句存放在 `src/question_notebook/schema.sql`。但 `models.py` 里**也内联了同样一份**（`_SCHEMA_SQL`）——为什么同一个定义要写两遍？因为 schema.sql 是给人看/给迁移脚本用的说明性文件，而内联那份保证"即使 schema.sql 因打包遗漏而缺失，程序照样能自动建表"。**代价是改表结构时两处都要改**（练习 1 就会踩到这个点）。
 
 ```sql
 CREATE TABLE questions (
@@ -259,15 +402,75 @@ with data_lock():
     save_questions(questions)      # 写
 ```
 
-**为什么要锁**：三个步骤必须「原子地」执行，中间不能插进另一个进程的写操作。文件锁让操作系统保证同一时刻只有一个进程能拿到锁，其他进程排队等待。
+**为什么要用锁**：三个步骤必须「原子地」执行，中间不能插进另一个进程的写操作。文件锁让操作系统保证同一时刻只有一个进程能拿到锁，其他进程排队等待。
 
 > 注意锁**不能重入**（同一进程拿两次会死锁），所以锁放在调用方的事务层，`save_questions` 内部不再加锁。SQLite 自己也有锁，这个应用层文件锁先行串行化，能避免直接撞上 SQLite 的 "database is locked" 错误。
 
+### 1.8 路径从哪来：paths.py 与「不能把数据写进代码目录」
+
+重组前，`models.py` 里是这么定位数据的：
+
+```python
+# 旧写法：数据就放在本文件旁边
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+```
+
+那时候「数据目录 = 代码目录」，所以这一行够用。重组后代码搬进了 `src/question_notebook/`，这一行就**闯祸**了：它会算出 `src/question_notebook/` 当数据目录，于是——
+
+- 你的 `questions.db` 会跑到包的目录里，而不是项目根目录；
+- 更糟的是，如果将来 `pip install` 了这个包，数据会被写到 `site-packages/question_notebook/` 里，那是"安装目录"，升级/卸载包时可能被清掉，**你的记录就没了**。
+
+所以重组时新增了 `paths.py`。核心结论一句话：**代码目录和数据目录必须分开，而且这件事只能有一个地方说了算。**
+
+```python
+# 代码位置
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))       # src/question_notebook/
+PROJECT_ROOT = os.path.dirname(os.path.dirname(PACKAGE_DIR))    # 往上一级是 src/，再上一级是根
+
+# 数据位置：优先环境变量，否则用项目根目录
+_ENV_DATA_DIR = os.environ.get("QUESTION_NOTEBOOK_DATA_DIR", "").strip()
+DATA_DIR = _ENV_DATA_DIR if _ENV_DATA_DIR else PROJECT_ROOT
+
+DATA_FILE = os.path.join(DATA_DIR, "questions.db")
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+EXPORT_DIR = os.path.join(DATA_DIR, "exports")
+```
+
+三个设计点：
+
+1. **`PROJECT_ROOT` 是往上两级**，不是一级——因为中间多了一层 `src/`。数目录层级时很容易数错，这种地方要写注释。
+2. **可用环境变量 `QUESTION_NOTEBOOK_DATA_DIR` 覆盖数据位置**。将来把程序部署到服务器，把数据放到持久化磁盘上，升级代码就不会碰到数据：
+   ```bash
+   # Windows PowerShell
+   $env:QUESTION_NOTEBOOK_DATA_DIR="D:\qn-data"; python run_cli.py
+   ```
+3. **同一个道理也适用于密钥**：Flask 的会话密钥 `.flask_secret` 与密码盐 `.auth_salt`，重组前写在 `web_app.py` 旁边（即代码目录），现在也改到数据目录。**密钥属于"这台机器的状态"，不属于"代码"**，混进代码目录既可能因权限写不进去，也会随代码一起被分发出去。
+
+> 这条经验很通用：**凡是"运行时会变的东西"（数据、密钥、缓存、日志）都不要放进代码目录。** 记住这句话，你就理解了绝大多数部署问题的成因。
+
+**为什么 `BASE_DIR` 这个名字还在？** 它是历史沿用（重组前指数据所在目录），现在与 `DATA_DIR` 同值。保留它是因为 CLI、Web、测试都按这个名字使用路径，改名要同时动好几处，收益不大。
+
+
 ---
 
-## 第 2 课：CLI 层 question_notebook.py —— 命令行怎么交互
+## 第 2 课：CLI 层 cli.py —— 命令行怎么交互
 
-CLI 层不碰文件细节，只负责「打印菜单、读输入、调数据层」。理解它，就理解了「界面层」该长什么样。
+CLI 层不碰文件细节，只负责「打印菜单、读输入、调数据层」。理解它，就理解了「界面层」该长什么样。（文件位置：`src/question_notebook/cli.py`）
+
+它开头向同包的数据层要东西，用的就是 0.5 讲的**相对导入**：
+
+```python
+from . import models          # 要"整个 models 模块"（用来访问 models.DATA_FILE）
+from .models import (         # 要"模块里的具体函数/类"，用起来不必带前缀
+    Question, load_questions, save_questions, build_csv,
+    backup_data, list_backups, restore_data, data_lock, DEFAULT_CATEGORY,
+)
+```
+
+两种写法各有用途，**这不是重复**：
+
+- `from . import models` —— 拿到**模块对象**。后面要用 `models.DATA_FILE` 这种"运行时才取值"的写法时必须这样（原因见 4.3 的值拷贝陷阱）。
+- `from .models import Question, ...` —— 直接拿到**函数/类**。调用时写 `load_questions()` 比 `models.load_questions()` 简洁。
 
 ### 2.1 菜单循环：程序的主骨架
 
@@ -374,7 +577,9 @@ if confirm != 'y':
 
 ---
 
-## 第 3 课：Web 层 web_app.py —— 从命令行到网页
+## 第 3 课：Web 层 web.py —— 从命令行到网页
+
+（文件位置：`src/question_notebook/web.py`。它开头同样用相对导入取得数据层与路径服务：`from . import paths` 与 `from .models import (...)`。）
 
 ### 3.1 从 CLI 到 Web 的思维转变
 
@@ -489,7 +694,7 @@ def _csrf_protection():
 
 ### 3.6 前端 index.html 如何配合
 
-前端用统一的 `api()` 函数发请求，自动带 token、自动处理登录：
+（文件位置：`src/question_notebook/templates/index.html`。）前端用统一的 `api()` 函数发请求，自动带 token、自动处理登录：
 
 ```javascript
 async function api(url, opts = {}) {
@@ -550,6 +755,20 @@ ctx.fillRect(x, bottom - totalH + solvedH, barW, totalH - solvedH);
 
 > 这个分工模式（后端聚合 + 前端渲染）是真实数据看板的标配。理解了它，以后换 ECharts 只是换「画图那一步」，统计逻辑一行都不用改。
 
+### 3.8 一个容易踩的坑：模板文件去哪找
+
+Flask 默认会在「创建 app 的那个模块所在目录」下找 `templates/` 文件夹。重组后 `web.py` 在包里，而 `templates/` 也在包里，**恰好还能对上**。但"恰好"不可靠——将来谁把 `web.py` 移个位置，网页就会突然 500 报「TemplateNotFound」，而错误信息不会告诉你是路径问题。
+
+所以这里写成**显式指定**：
+
+```python
+app = Flask(__name__, template_folder=paths.TEMPLATE_DIR)
+```
+
+`paths.TEMPLATE_DIR` 由 `paths.py` 算出包内 `templates/` 的绝对路径。**显式优于隐式**：多写一个参数，换来"移动文件也不会坏"，而且读代码的人一眼就知道模板在哪。
+
+> 这条经验同样通用：凡是"靠默认值恰好能工作"的地方，如果它是关键路径，就值得写明。默认值会随版本或文件位置变化，而显式声明不会。
+
 ---
 
 ## 第 4 课：架构思想与并发安全
@@ -564,28 +783,35 @@ ctx.fillRect(x, bottom - totalH + solvedH, barW, totalH - solvedH);
 界面层（CLI / Web）  →  调用  →  数据层（models.py）
 ```
 
+知识点：**单向依赖是可以用代码检查的**。如果有人手一抖在 `models.py` 顶上写下 `from . import cli`，就形成了循环依赖（cli 要 models、models 又要 cli），Python 会在导入时直接报 `ImportError: cannot import name ... (most likely due to a circular import)`。**报错总比悄悄写坏好**——这就是为什么分层规范值得守住。
+
 ### 4.2 三条设计原则
 
 1. **单一职责**：一个模块只做一类事（数据层不管界面，界面层不碰数据库）。
 2. **依赖单向**：界面依赖数据，数据不依赖界面。
-3. **存储隔离**：数据库读写集中在 `models.py`，以后换 PostgreSQL 界面层零改动。
+3. **存储隔离**：数据库读写集中在数据层（`models.py`），以后换 PostgreSQL 界面层零改动。
+
+补充第 4 条（重组时新增）：**路径唯一来源**——"数据放在哪"只在 `paths.py` 里定义一次，其他模块一律问它，不允许各自用 `__file__` 拼路径。否则同一个路径会有好几个版本，改一处漏一处。
 
 ### 4.3 真实踩坑：值拷贝陷阱
 
 ```python
-# cli.py
+# 某模块里
 from models import DATA_FILE   # 这是「拷贝」了当时的字符串值！
 ```
 
-测试想重定向数据文件到临时目录，改了 `models.DATA_FILE`，但 `cli.DATA_FILE` 还是旧值——CLI 依然读写真实文件。因为 `from ... import ...` 是**值拷贝**，不是引用。
+测试想重定向数据文件到临时目录，改了 `models.DATA_FILE`，但那个模块自己那份 `DATA_FILE` 还是旧值——于是它依然读写真实文件。因为 `from ... import ...` 是**值拷贝**，不是引用。
 
 两种解法：
-- 用 `import models` 然后 `models.DATA_FILE`（始终读最新值）。
-- 测试时两个模块的常量一起改（早期版本采用，但容易漏改一边）。
 
-**本项目现在采用第一种思路的单点维护**：路径常量的唯一定义处是 `models.py`，其他模块运行时通过 `models` 模块取值，因此测试只需重定向 `models.*` 一处即可全局生效（详见 5.3 节）。
+- 用 `import models` 然后每次访问 `models.DATA_FILE`（始终读最新值）。
+- 各处常量一起改（早期版本采用，但容易漏改一边）。
+
+**本项目采用第一种：单点维护。** 重组后路径的定义处是 `paths.py`，`models.py` 通过 `from .paths import DATA_FILE, ...` 把它"接入"自己的命名空间；CLI、Web 又都通过 `models` 模块去取（比如 `models.DATA_FILE`），谁都不缓存一份副本。因此测试只要重定向 `models.DATA_FILE` 等四个常量，就能让**整个程序**都指向临时目录（详见 5.3）。
 
 > **进阶坑**：测试隔离还要求 `BASE_DIR` 也要一起重定向——因为 `restore_data` 做原子替换时临时文件要和目标文件同目录（`os.replace` 跨文件系统会失败）。
+
+**从这里能提炼出一条通用原则**：可变的状态（路径、配置、连接）不要用 `from X import 状态` 到处拷贝，而应该 `import X` 之后通过 `X.状态` 访问。前者是快照，后者是实时查询。
 
 ### 4.4 并发安全：三个层次的演进
 
@@ -599,21 +825,52 @@ from models import DATA_FILE   # 这是「拷贝」了当时的字符串值！
 
 第 2 阶段只能管住**同一个进程里的多线程**；一旦 CLI 和 Web 是两个独立进程，`threading.Lock` 就失效了，所以升级成操作系统级的文件锁。理解「锁的作用范围」是并发编程的核心。
 
+### 4.5 重组后的高频错误：三种「找不到模块」
+
+重组（平铺 → src 包布局）之后，最常见的报错会和"导入"有关。新手看到 `ModuleNotFoundError` 容易慌，其实记住"**名单**"这一个概念就够了（见 0.5）。
+
+| 报错 | 原因 | 怎么解决 |
+|------|------|---------|
+| `No module named 'models'` | 用了旧的平铺式导入。重组后 `models` 不再是顶层模块，它是包里的模块 | 包内改 `from . import models`；包外改 `from question_notebook import models` |
+| `No module named 'question_notebook'` | `src/` 不在名单（`sys.path`）上 | 用 `python run_cli.py` 启动，或先 `pip install -e .` |
+| `attempted relative import with no known parent package` | 用**相对导入**（`from . import models`）的文件被当成"独立脚本"直接运行了 | 该文件应当作为包的一部分运行：`python -m question_notebook.web`，而不是 `python src/question_notebook/web.py` |
+
+第三条最值得琢磨：**相对导入的 `.` 需要知道"我在哪个包里"**。直接用文件路径运行一个模块时，Python 认为它是孤立的脚本、不属于任何包，那个 `.` 就无处可指，于是报错。这解释了一个常见困惑——"为什么同一个文件，`python file.py` 报错，`python -m 包.file` 就正常"。
+
+> 小结：**运行方式决定了"包的上下文"是否存在**。这不是代码写错了，而是入口选错了。
+
 ---
 
-## 第 5 课：自动化测试 test_qn.py
+## 第 5 课：自动化测试
 
 ### 5.1 为什么测试很重要
 
 手动测试靠人肉点菜单，改一次代码点一遍，迟早漏。自动化测试把「验证」变成一条命令：
 
 ```bash
-python test_qn.py      # 推荐日常用：零依赖，只需 Python 标准库
+# 在项目根目录执行（文件在 tests/ 下，名字也说明它是谁的测试）
+python tests/test_question_notebook.py   # 推荐日常用：零依赖，只需 Python 标准库
 # 或（装了 pytest 后，输出更清晰，支持 -k 筛选、--lf 重跑失败项）
 pytest
 ```
 
 跑一遍，**37 个用例全绿**，就说明这次改动没把已有功能改坏。
+
+**测试文件开头有一段"引导代码"**，作用和 `run_cli.py` 一样（见 0.5）：把 `src/` 加进名单，再导入包。所以**测试不需要安装任何东西**就能跑：
+
+```python
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))      # tests/
+PROJECT_ROOT = os.path.dirname(TESTS_DIR)                   # 项目根
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from question_notebook import cli, models  # noqa: E402  (必须在路径引导之后)
+```
+
+注意最后一行用的是**绝对导入**（`from question_notebook import ...`），因为测试文件在包**外面**；包内部才用相对导入。这条"内相对、外绝对"的界线要记牢。
+
+`conftest.py`（放在项目根目录）里也有一份同样的引导，那是给 pytest 用的——pytest 会在收集测试前自动执行它。
 
 ### 5.2 模拟用户输入：mock
 
@@ -650,7 +907,7 @@ class QuestionNotebookTestCase(unittest.TestCase):
 
 三个关键设计点：
 
-1. **只改 `models` 一处即可。** 第 4 课讲过 `from X import Y` 是值拷贝，那为什么这里不用像早期版本那样 `models.DATA_FILE = cli.DATA_FILE = ...` 两边一起改？因为 `question_notebook.py` 虽然用 `from models import load_questions` 导入了**函数**，但函数内部是运行时通过 `models` 模块去取 `DATA_FILE` 的；CLI 自身没有缓存这份路径。所以重定向 `models` 就全局生效了。**这也是「单点维护」的价值**：路径只有一处来源。
+1. **只改 `models` 一处即可。** 第 4 课讲过 `from X import Y` 是值拷贝，那为什么这里不用像早期版本那样 `models.DATA_FILE = cli.DATA_FILE = ...` 两边一起改？因为路径的实际定义处是 `paths.py`，`models.py` 把它接入自己的命名空间，而 `cli.py` / `web.py` 都通过 `models` 模块去取（`models.DATA_FILE`），没有任何一处缓存了副本。所以重定向 `models` 就全局生效。**这就是"路径唯一来源 + 不拷贝状态"两条原则合起来的效果**：需要改的地方从"好几处"变成"一处"。
 
 2. **临时目录放在项目内 `.tmp/`，而不是系统临时目录。** 早期实现用 `tempfile.mkdtemp()`，默认落在系统临时目录——在沙箱、受限环境或部分 CI 容器里那里**不可写**，整套测试会直接崩在 `.data.lock` 的 `PermissionError` 上。现在改为在项目内自建目录（`os.makedirs` + 随机后缀）。顺带一提：这里刻意不用 `tempfile.mkdtemp()`，因为部分沙箱实现连"往 mkdtemp 建的目录里写文件"都会拦。`.tmp/` 已在 `.gitignore` 中，跑完自动删除。
 
@@ -683,7 +940,7 @@ self.c.post('/api/questions', json={...}, headers={"X-CSRF-Token": self._csrf})
 
 本项目的工程规范（依赖管理、代码风格、测试要求、CI、提交信息格式）单独写在 [STANDARDS.md](STANDARDS.md)，含面向新手的名词解释。改代码前后至少记住三件事：
 
-1. 改完先跑 `python test_qn.py`，**37 项必须全绿**；
+1. 改完先跑 `python tests/test_question_notebook.py`，**37 项必须全绿**；
 2. 修 bug 要补一个能复现它的测试用例；
 3. 提交说明按 `类型: 说明` 写（如 `fix(cli): 修复搜索后数据未刷新`），别写 `update`。
 
@@ -695,23 +952,50 @@ self.c.post('/api/questions', json={...}, headers={"X-CSRF-Token": self._csrf})
 
 **入门级**
 
-1. 给问题增加「重要程度」字段（高/中/低），列表里用 `★` 显示——体会「加一个字段要改哪些地方」（提示：`schema.sql` 与 `models.py` 内联的 `_SCHEMA_SQL` 加列、`Question` 的 `to_dict`/`from_dict`、CLI 的显示、Web 的表单和卡片；注意旧 `questions.db` 已有数据，需考虑兼容——`ALTER TABLE ADD COLUMN ... DEFAULT ...` 是不破坏旧数据的加列方式）。
+1. 给问题增加「重要程度」字段（高/中/低），列表里用 `★` 显示——体会「加一个字段要改哪些地方」（提示：包内 `schema.sql` 与 `models.py` 内联的 `_SCHEMA_SQL` 加列、`Question` 的 `to_dict`/`from_dict`、CLI 的显示、Web 的表单和卡片；注意旧 `questions.db` 已有数据，需考虑兼容——`ALTER TABLE ADD COLUMN ... DEFAULT ...` 是不破坏旧数据的加列方式）。
 2. 添加问题时校验标题长度（超过 50 字拒绝）——练习输入校验。
+3. **（结构练习）把数据目录改到项目外。** 用 `QUESTION_NOTEBOOK_DATA_DIR` 指到一个新目录，启动程序并新增一条问题，然后确认新目录里出现了 `questions.db`、而原来根目录的那个没被动过。做完你就真正理解了「代码目录与数据目录分离」的价值——换台机器只搬数据目录即可。
+4. **（导入练习）亲手制造并解决一次 `ModuleNotFoundError`。** 在项目根目录运行 `python -c "import question_notebook"` 看它报错，再分别用 `PYTHONPATH=src`（Windows：`$env:PYTHONPATH="src"`）和 `python run_cli.py` 让它成功。然后思考：为什么 `python -m src.question_notebook` 也能work？（提示：把 `src` 当成一个包，问题就变成了"`question_notebook` 在 `src` 里面"。）
 
 **进阶级**
 
-3. 把搜索改成 OR 逻辑（任一关键词命中即可）——对比 AND 实现的差异，思考哪种更实用。
-4. 给「数据可视化」面板加第三张图：**按月趋势折线图**——`/api/stats` 已经返回了 `by_month` 数据（每月总数 + 已解决数），用 Canvas 画两条折线（总数线 + 已解决线），体会「数据已就绪，只是换一种画法」。
-5. 把 `save_questions` 的「DELETE 全表 + INSERT 全部」改成「只更新变化的那几行」——体会「全量覆盖」与「增量更新」的取舍（提示：用 `UPDATE`/`DELETE WHERE id=?`/`INSERT`，需要跟踪哪些是新增/修改/删除）。
+5. 把搜索改成 OR 逻辑（任一关键词命中即可）——对比 AND 实现的差异，思考哪种更实用。
+6. 给「数据可视化」面板加第三张图：**按月趋势折线图**——`/api/stats` 已经返回了 `by_month` 数据（每月总数 + 已解决数），用 Canvas 画两条折线（总数线 + 已解决线），体会「数据已就绪，只是换一种画法」。
+7. 把 `save_questions` 的「DELETE 全表 + INSERT 全部」改成「只更新变化的那几行」——体会「全量覆盖」与「增量更新」的取舍（提示：用 `UPDATE`/`DELETE WHERE id=?`/`INSERT`，需要跟踪哪些是新增/修改/删除）。
 
 **挑战级**
 
-6. 把登录密码改成「每个用户一套」（多用户系统）——给 `Question` 加 `owner` 字段，这是所有社区类应用的第一步。
-7. 部署到云服务器，让同学通过公网访问——体会从「本地工具」到「线上产品」的完整流程（记得先设 `QUESTION_NOTEBOOK_PASSWORD`）。
+8. 把登录密码改成「每个用户一套」（多用户系统）——给 `Question` 加 `owner` 字段，这是所有社区类应用的第一步。
+9. **（打包练习）让项目能被安装。** 装好 `setuptools` 后执行 `python -m pip install -e .`，确认 `question-notebook` 与 `question-notebook-web` 两个命令可用；再执行 `python -m build`（或 `pip install .`）看生成的 wheel 里是否**包含了** `templates/index.html` 与 `schema.sql`。如果没包含，回头检查 `[tool.setuptools.package-data]`——这正是"非 Python 文件容易在打包时丢失"这一经典坑。
+10. 部署到云服务器，让同学通过公网访问——体会从「本地工具」到「线上产品」的完整流程（记得先设 `QUESTION_NOTEBOOK_PASSWORD`，并把数据放到持久化目录）。
+
+---
+
+## 附：包与导入速查表
+
+第 0.5 与 4.5 节讲的名词，集中列在这里备查。
+
+| 名词 | 一句话解释 |
+|------|-----------|
+| **模块（module）** | 一个 `.py` 文件 |
+| **包（package）** | 带 `__init__.py` 的文件夹，用来组织多个模块（相当于给模块一个"姓氏"） |
+| **`__init__.py`** | 包的标识文件；也可以是空的，常用来写包说明、版本号和对外接口 |
+| **`__main__.py`** | 让 `python -m 包名` 能运行该包；里面写启动逻辑 |
+| **src 布局** | 把代码放 `src/包名/` 下的现代目录约定，好处是根目录整洁、能及早暴露打包错误 |
+| **`sys.path`** | Python 查找模块的"名单"；名单上没有的，`import` 就会失败 |
+| **`PYTHONPATH`** | 环境变量，用来给 Python 预设/追加名单内容 |
+| **相对导入** | `from . import models`，`.` 指当前包；只用于**包内部** |
+| **绝对导入** | `from question_notebook import cli`，从最外层写全；包**外部**（测试/脚本）用它 |
+| **入口点（entry point）** | `pyproject.toml` 里 `[project.scripts]` 注册的命令，安装后可直接敲，如 `question-notebook` |
+| **`pip install -e .`** | 可编辑安装：把项目"链接"进环境，改代码无需重装（开发时用） |
+| **package-data** | 声明要随包分发的非 Python 文件（如 `.html`/`.sql`），漏了声明的文件安装后会丢失 |
+
+三种启动方式：`python run_cli.py`（未安装可用）→ `python -m question_notebook`（需可导入）→ `question-notebook`（需安装）。
 
 ---
 
 ## 学习路线建议
+
 
 - **零基础**：先读第 0、1、2 课，配合 CLI 版反复练习，完成入门级练习。
 - **有基础**：重点看第 3 课（Web + 认证 + CSRF）和第 4 课（架构 + 并发），这是简历面试的高频考点。

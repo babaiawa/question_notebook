@@ -2,17 +2,26 @@
 """
 migrate_to_sqlite.py - 将 questions.json 迁移到 SQLite 数据库（v0.2.0）
 
-使用方法:
-    python migrate_to_sqlite.py             # 执行迁移
-    python migrate_to_sqlite.py --dry-run   # 仅预览，不实际写库
-    python migrate_to_sqlite.py --force     # 覆盖已存在的数据库
+使用方法（在项目根目录执行）:
+    python scripts/migrate_to_sqlite.py             # 执行迁移
+    python scripts/migrate_to_sqlite.py --dry-run   # 仅预览，不实际写库
+    python scripts/migrate_to_sqlite.py --force     # 覆盖已存在的数据库
 
 迁移流程:
     1. 读取 questions.json（缺失/损坏则给出明确提示并退出）
     2. 备份原 JSON 文件到 backups/ 目录
-    3. 应用 schema.sql 创建表结构与索引
+    3. 应用包内的 schema.sql 创建表结构与索引
     4. 逐条插入数据，保留原始 ID（在一个事务内提交，失败自动回滚）
     5. 打印迁移摘要
+
+路径说明（重组后）:
+    本脚本属于"工具脚本"，不是运行时的包代码，因此放在 scripts/ 下。
+    它需要定位两类路径，都以**项目根目录**为基准：
+      - 用户数据（questions.json / questions.db / backups/）→ 在项目根目录
+      - schema.sql → 在包目录 src/question_notebook/ 内
+
+    schema.sql 之所以放在包里，是因为它是代码的一部分（建表定义，随代码发布）；
+    而 questions.json/db 是用户数据，不该混进代码目录。
 
 注意:
     - 迁移后 questions.json 不会被删除（仅复制到 backups/），确认无误后可手动清理。
@@ -26,11 +35,25 @@ import shutil
 import sqlite3
 import sys
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 让脚本能导入本项目包：把 src/ 加进模块搜索路径（与测试同样的引导方式）。
+# 这样脚本无需安装即可运行，也不依赖"当前工作目录恰好是项目根目录"。
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(_SCRIPTS_DIR)
+_SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+
+from question_notebook import paths  # noqa: E402  (必须在路径引导之后导入)
+
+# 用户数据一律以项目根目录为基准（也支持 QUESTION_NOTEBOOK_DATA_DIR 覆盖，
+# 与程序运行时的规则保持一致——paths.py 是这套规则的唯一来源）
+BASE_DIR = paths.DATA_DIR
 JSON_FILE = os.path.join(BASE_DIR, "questions.json")
 DB_FILE = os.path.join(BASE_DIR, "questions.db")
-SCHEMA_FILE = os.path.join(BASE_DIR, "schema.sql")
 BACKUP_DIR = os.path.join(BASE_DIR, "backups")
+
+# 建表定义在包内
+SCHEMA_FILE = paths.SCHEMA_FILE
 
 DEFAULT_CATEGORY = "未分类"
 

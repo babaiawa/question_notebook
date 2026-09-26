@@ -1,15 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-test_qn.py - Question Notebook 自动化测试
+test_question_notebook.py - Question Notebook 自动化测试
 
-运行方式（两种都支持，结果一致）：
-    pytest                                  # 推荐：更清晰的输出，可 -k 筛选、--lf 重跑失败项
-    python test_qn.py                       # 无需安装任何工具（只用 Python 标准库）
+运行方式（都支持，结果一致）：
+    在项目根目录执行：
+        python tests/test_question_notebook.py   # 无需安装任何东西（只用 Python 标准库）
+        pytest                                   # 装了 pytest 后：输出更清晰，可筛选、重跑
+
+    也可以在 tests/ 目录里执行：
+        python test_question_notebook.py
 
 覆盖范围：
 - 数据层（models）：模型序列化往返、读写循环、旧数据兼容、损坏文件容错
-- CLI 层：完整业务流程、备份恢复、CSV 导出、分类浏览、多关键词搜索
-- Web 层：增删改查、CSRF 防护、登录登出、统计接口
+- CLI 层（cli）：完整业务流程、备份恢复、CSV 导出、分类浏览、多关键词搜索
+- Web 层（web）：增删改查、CSRF 防护、登录登出、统计接口
 
 安全说明：测试会把数据路径重定向到项目内的 .tmp/ 临时目录，不会读写真实的
 questions.db。临时目录放在项目内（而非系统临时目录）有两个原因：
@@ -26,12 +30,20 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-# 项目根目录（测试自身所在目录），用于定位工作区内的临时目录
-WORKSPACE_ROOT = os.path.dirname(os.path.abspath(__file__))
+# ---------- 让测试在「未安装」状态下也能导入本项目 ----------
+# 本文件在 tests/ 下，而代码在 src/question_notebook/ 下，是分开的目录。
+# Python 默认不会去 src/ 里找模块，所以这里手动把 src/ 插进搜索路径。
+#
+# 正规做法是 `pip install -e .`（见 STANDARDS.md），但那是**额外前提**；
+# 这段引导保证"刚克隆下来、什么都没装"也能直接跑测试。
+# 必须放在导入 question_notebook 之前执行。
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(TESTS_DIR)
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
-sys.path.insert(0, WORKSPACE_ROOT)
-import models
-import question_notebook as cli
+from question_notebook import cli, models  # noqa: E402  (路径引导必须先执行)
 
 # 检测 Flask 是否可用：未安装时跳过 Web 接口测试，数据层/CLI 测试照常运行
 try:
@@ -53,7 +65,7 @@ def _make_test_tmpdir():
 
     万一 .tmp/ 本身不可写（如只读介质），再退回系统临时目录，保证测试总能跑。
     """
-    base = os.path.join(WORKSPACE_ROOT, ".tmp")
+    base = os.path.join(PROJECT_ROOT, ".tmp")
     try:
         os.makedirs(base, exist_ok=True)
         tmpdir = os.path.join(base, "qn_test_" + uuid.uuid4().hex[:8])
@@ -96,7 +108,7 @@ def _remove_tmpdir(path):
     # 顺手清理：若 .tmp/ 已空则一并移除，不给项目留下空目录。
     # os.rmdir 只在目录为空时成功，因此不会误删其他用例正在使用的目录。
     try:
-        os.rmdir(os.path.join(WORKSPACE_ROOT, ".tmp"))
+        os.rmdir(os.path.join(PROJECT_ROOT, ".tmp"))
     except OSError:
         pass  # 目录非空（其他用例还在用）或不存在，属于正常情况
     return True
@@ -408,10 +420,10 @@ class TestWeb(QuestionNotebookTestCase):
         # 测试环境不设置 QUESTION_NOTEBOOK_PASSWORD：
         # AUTH_ENABLED=False，等价于原有未登录状态下的免登录访问。
         # 用 TESTING=True 关闭 CSRF 的 session-permanent 校验需要的 cookie 行为。
-        import web_app
-        web_app.app.config["TESTING"] = True
-        cls.app = web_app.app
-        cls.client = web_app.app.test_client()
+        from question_notebook import web
+        web.app.config["TESTING"] = True
+        cls.app = web.app
+        cls.client = web.app.test_client()
 
     def setUp(self):
         # 临时目录与数据路径重定向由基类 QuestionNotebookTestCase 统一处理
@@ -616,24 +628,24 @@ class TestWeb(QuestionNotebookTestCase):
     def test_auth_disabled_by_default(self):
         """默认未设置 QUESTION_NOTEBOOK_PASSWORD → AUTH_ENABLED=False，
         所有接口直接可访问（无需登录）"""
-        import web_app
-        self.assertFalse(web_app.AUTH_ENABLED)
+        from question_notebook import web
+        self.assertFalse(web.AUTH_ENABLED)
         self.assertEqual(self._csrf_get('/api/auth-status').get_json(),
                          {"auth_enabled": False, "logged_in": True})
 
     def test_auth_enabled_requires_login(self):
         """启用认证后，受保护接口在未登录时返回 401，登录后恢复访问"""
-        import web_app
+        from question_notebook import web
         # 临时启用一个密码
-        old_enabled = web_app.AUTH_ENABLED
-        old_salt = web_app._AUTH_SALT
-        old_hash = web_app._AUTH_HASH
+        old_enabled = web.AUTH_ENABLED
+        old_salt = web._AUTH_SALT
+        old_hash = web._AUTH_HASH
         try:
             import hashlib
-            web_app.AUTH_ENABLED = True
-            web_app._AUTH_SALT = b'\x00' * 16
-            web_app._AUTH_HASH = hashlib.pbkdf2_hmac(
-                "sha256", "hunter2".encode("utf-8"), web_app._AUTH_SALT, 100_000
+            web.AUTH_ENABLED = True
+            web._AUTH_SALT = b'\x00' * 16
+            web._AUTH_HASH = hashlib.pbkdf2_hmac(
+                "sha256", "hunter2".encode("utf-8"), web._AUTH_SALT, 100_000
             )
             c = self.app.test_client()
             c.get('/api/csrf')  # 建立会话（拿到 CSRF 与 session）
@@ -656,22 +668,22 @@ class TestWeb(QuestionNotebookTestCase):
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.get_json(), [])
         finally:
-            web_app.AUTH_ENABLED = old_enabled
-            web_app._AUTH_SALT = old_salt
-            web_app._AUTH_HASH = old_hash
+            web.AUTH_ENABLED = old_enabled
+            web._AUTH_SALT = old_salt
+            web._AUTH_HASH = old_hash
 
     def test_logout_clears_session(self):
         """登出后再访问受保护接口，认证启用时应重新被 401"""
-        import web_app
-        old_enabled = web_app.AUTH_ENABLED
-        old_salt = web_app._AUTH_SALT
-        old_hash = web_app._AUTH_HASH
+        from question_notebook import web
+        old_enabled = web.AUTH_ENABLED
+        old_salt = web._AUTH_SALT
+        old_hash = web._AUTH_HASH
         try:
             import hashlib
-            web_app.AUTH_ENABLED = True
-            web_app._AUTH_SALT = b'\x01' * 16
-            web_app._AUTH_HASH = hashlib.pbkdf2_hmac(
-                "sha256", "pass1".encode("utf-8"), web_app._AUTH_SALT, 100_000
+            web.AUTH_ENABLED = True
+            web._AUTH_SALT = b'\x01' * 16
+            web._AUTH_HASH = hashlib.pbkdf2_hmac(
+                "sha256", "pass1".encode("utf-8"), web._AUTH_SALT, 100_000
             )
             c = self.app.test_client()
             c.get('/api/csrf')
@@ -687,20 +699,22 @@ class TestWeb(QuestionNotebookTestCase):
             r = c.get('/api/questions', headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 401)
         finally:
-            web_app.AUTH_ENABLED = old_enabled
-            web_app._AUTH_SALT = old_salt
-            web_app._AUTH_HASH = old_hash
+            web.AUTH_ENABLED = old_enabled
+            web._AUTH_SALT = old_salt
+            web._AUTH_HASH = old_hash
 
     def test_login_empty_body_is_400(self):
         """登录接口：非法 body（空/非对象）返回 400，且不应被 CSRF 挡住成 403。
         仅在认证开启场景下校验（auth=False 时登录接口直接返回成功，不校验 body）。"""
-        import web_app, hashlib
-        old = (web_app.AUTH_ENABLED, web_app._AUTH_SALT, web_app._AUTH_HASH)
+        import hashlib
+
+        from question_notebook import web
+        old = (web.AUTH_ENABLED, web._AUTH_SALT, web._AUTH_HASH)
         try:
-            web_app.AUTH_ENABLED = True
-            web_app._AUTH_SALT = b'\x02' * 16
-            web_app._AUTH_HASH = hashlib.pbkdf2_hmac(
-                "sha256", b"x", web_app._AUTH_SALT, 100_000
+            web.AUTH_ENABLED = True
+            web._AUTH_SALT = b'\x02' * 16
+            web._AUTH_HASH = hashlib.pbkdf2_hmac(
+                "sha256", b"x", web._AUTH_SALT, 100_000
             )
             c = self.app.test_client()
             # 非对象 body：不应是 CSRF 403，而应由 JSON 校验返回 400
@@ -710,11 +724,11 @@ class TestWeb(QuestionNotebookTestCase):
             r = c.post('/api/login', data='', content_type='application/json')
             self.assertEqual(r.status_code, 400)
         finally:
-            web_app.AUTH_ENABLED, web_app._AUTH_SALT, web_app._AUTH_HASH = old
+            web.AUTH_ENABLED, web._AUTH_SALT, web._AUTH_HASH = old
 
 
 if __name__ == "__main__":
-    # 直接运行 python test_qn.py 时，用一个自定义 Runner 把结果压成一行，
+    # 直接运行 python tests/test_question_notebook.py 时，用一个自定义 Runner 把结果压成一行，
     # 避免 unittest 默认的 "...." 点阵输出让人看不清最终结论。
     _runner = unittest.TextTestRunner(verbosity=2, buffer=False)
     _result = _runner.run(unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__]))

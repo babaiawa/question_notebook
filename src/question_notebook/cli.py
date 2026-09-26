@@ -1,15 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-question_notebook.py - CLI 界面层
+cli.py - CLI 界面层
 
-负责命令行交互（菜单、输入输出），数据逻辑由 models.py 提供。
-运行：python question_notebook.py
+负责命令行交互（菜单、输入输出），数据逻辑由同包的 models.py 提供。
+运行（在项目根目录）：python -m question_notebook
+或安装后：question-notebook
 """
 import datetime
 import os
 
-import models
-from models import (
+# 包内相对导入：`. ` 表示"同一个包里的兄弟模块"。
+# 相比旧版的 `import models`，这样写的好处是模块名不会和第三方包或标准库撞名，
+# 而且无论从哪里调用，Python 都能准确找到本包内的 models.py。
+from . import models
+from .models import (
     Question,
     load_questions,
     save_questions,

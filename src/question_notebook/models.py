@@ -3,17 +3,20 @@
 models.py - 数据层
 
 负责问题数据的模型定义、SQLite 数据库读写，以及备份/恢复/导出等数据操作。
-CLI 版（question_notebook.py）和 Web 版（web_app.py）共用本模块，
+CLI 版（cli.py）和 Web 版（web.py）共用本模块，
 数据逻辑只在这里维护一份，改 bug 只需改一处。
 
 v0.2.0 起：存储从 questions.json 迁移到 SQLite（questions.db）。
-一次性迁移请用 migrate_to_sqlite.py。界面层（CLI/Web）零改动，
+v0.3.0 起：代码重组为标准包结构，本模块位于 question_notebook 包内，
+           数据文件位置改由 paths.py 统一解析（默认仍在项目根目录）。
+一次性迁移请用 scripts/migrate_to_sqlite.py。
+
 本模块对外 API（Question / load_questions / save_questions / backup_data /
-list_backups / restore_data / build_csv / data_lock）保持不变。
+list_backups / restore_data / build_csv / get_stats / data_lock）保持不变。
 
 职责划分：
 - 本模块：只关心"数据长什么样"和"怎么存取"，不关心界面
-- 界面层（CLI/Web）：负责输入输出、菜单、路由，只调用本模块的函数
+- 界面层（cli / web）：负责输入输出、菜单、路由，只调用本模块的函数
 """
 import contextlib
 import csv
@@ -25,11 +28,15 @@ import shutil
 import sqlite3
 import tempfile
 
-# 基于本文件所在目录定位数据文件（CLI/Web 都从项目根目录找）
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(BASE_DIR, "questions.db")
-BACKUP_DIR = os.path.join(BASE_DIR, "backups")
-EXPORT_DIR = os.path.join(BASE_DIR, "exports")
+# 路径常量统一来自 paths.py——"数据放哪"只有一处定义。
+# 这里用 from ... import 拿到的是**值拷贝**，所以本模块内部一律通过这些模块级
+# 名字访问路径；测试重写 models.DATA_FILE 等即可整体生效（详见 paths.py 注释）。
+#
+# 注意：只导入本模块真正用到的四个（DATA_FILE / BACKUP_DIR / EXPORT_DIR / BASE_DIR）。
+# PACKAGE_DIR、PROJECT_ROOT 之类需要时请直接从 question_notebook.paths 取，
+# 不必经本模块转发——少一层转发，就少一处将来会忘记同步的地方。
+from .paths import BACKUP_DIR, BASE_DIR, DATA_FILE, EXPORT_DIR
+
 DEFAULT_CATEGORY = "未分类"
 
 # 备份文件名白名单：questions_YYYYMMDD_HHMMSS[_微秒].db
@@ -38,8 +45,9 @@ BACKUP_NAME_PATTERN = re.compile(r"^questions_\d{8}_\d{6}(_\d{6})?\.db$")
 
 CSV_HEADERS = ["ID", "标题", "描述", "创建时间", "是否已解决", "解决方案", "分类"]
 
-# 内联建表 SQL：与 schema.sql 保持一致。
-# 内联而非读取 schema.sql，是为了在测试/打包等 schema.sql 不在同目录时仍能自举建库。
+# 内联建表 SQL：与包内 schema.sql 保持一致。
+# 内联而非读取 schema.sql，是为了在任何情况下都能自举建库：
+# 即使 schema.sql 缺失（打包遗漏、被单独拷贝走），程序照样能建表运行。
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS questions (
     id          INTEGER PRIMARY KEY,

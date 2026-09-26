@@ -13,6 +13,6 @@
 # 只写「直接用到」的包，不写「包的包」（传递依赖由 pip 自动解析）。
 # =============================================================================
 
-# Web 界面层（web_app.py）必需。Flask 2.3+ 才支持 app.json.ensure_ascii，
-# 本项目用它保证中文在 JSON 里原样输出（不转成 \uXXXX）。
+# Web 界面层（src/question_notebook/web.py）必需。Flask 2.3+ 才支持
+# app.json.ensure_ascii，本项目用它保证中文在 JSON 里原样输出（不转成 \uXXXX）。
 Flask>=2.3

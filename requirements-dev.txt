@@ -7,9 +7,9 @@
 #   requirements-dev.txt  开发者/贡献者额外需要这些才能「改」本项目（查错 + 测试）
 #
 # 安装命令：
-#     pip install -r requirements.txt -r requirements-dev.txt
+#     python -m pip install -r requirements.txt -r requirements-dev.txt
 # 或直接用 pyproject.toml 的可选依赖：
-#     pip install -e ".[dev]"
+#     python -m pip install -e ".[dev]"
 #
 # 与 pyproject.toml 的 [project.optional-dependencies] dev 保持一致，改时同步。
 # =============================================================================
@@ -17,7 +17,8 @@
 # 代码校对员：挑出未使用的变量、多余的 import、格式问题，并可自动修复
 ruff>=0.6
 
-# 测试运行器：自动跑 test_qn.py 里的 37 个用例（比自带的 unittest 更好用）
+# 测试运行器：自动跑 tests/test_question_notebook.py 里的 37 个用例
+# （比自带的 unittest 更好用）
 pytest>=7.0
 
 # 测试覆盖率：回答「测试到底覆盖了多少行代码」，找出没被测到的分支

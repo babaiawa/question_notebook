@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-web_app.py - Web 界面层
+web.py - Web 界面层
 
-负责 Flask 路由和 HTTP 交互，数据逻辑由 models.py 提供。
-运行：python web_app.py  →  浏览器打开 http://127.0.0.1:5000
+负责 Flask 路由和 HTTP 交互，数据逻辑由同包的 models.py 提供。
+运行（在项目根目录）：python -m question_notebook.web
+或安装后：question-notebook-web
+启动后浏览器打开 http://127.0.0.1:5000
 
 安全机制（可配置）：
 - 密码认证：设置环境变量 QUESTION_NOTEBOOK_PASSWORD 后启用登录，
@@ -23,8 +25,9 @@ from flask import (
     send_file, session, abort,
 )
 
-# 数据模型与路径常量统一来自数据层 models.py
-from models import (
+# 数据模型与路径常量统一来自同包的数据层
+from . import paths
+from .models import (
     Question,
     load_questions,
     save_questions,
@@ -37,16 +40,21 @@ from models import (
     DEFAULT_CATEGORY,
 )
 
-app = Flask(__name__)
+# template_folder 显式指向包内 templates/：
+# Flask 默认会在"应用模块所在目录下的 templates"找模板，这里写明更稳妥，
+# 免得将来模块挪位置后又得排查模板找不到的问题。
+app = Flask(__name__, template_folder=paths.TEMPLATE_DIR)
 app.json.ensure_ascii = False  # 中文原样输出，不做 \uXXXX 转义
 
 # ---------- 安全配置 ----------
 
 # Flask 会话签名密钥：优先用环境变量，否则用文件内持久化密钥
+#
+# 注意：密钥文件与数据文件放在一起（paths.BASE_DIR，默认项目根目录），
+# **不能**放进包目录 src/question_notebook/ 里——那是代码，代码目录应当是只读的、
+# 可被覆盖升级的；把密钥写进代码目录，既可能因权限失败，也会随代码分发泄漏。
 _ENV_SECRET = os.environ.get("QUESTION_NOTEBOOK_SECRET")
-_SECRET_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), ".flask_secret"
-)
+_SECRET_FILE = os.path.join(paths.BASE_DIR, ".flask_secret")
 if _ENV_SECRET:
     app.secret_key = _ENV_SECRET
 else:
@@ -62,9 +70,8 @@ _AUTH_PASSWORD = os.environ.get("QUESTION_NOTEBOOK_PASSWORD", "").strip()
 AUTH_ENABLED = bool(_AUTH_PASSWORD)
 
 # 密码哈希：不做明文比较，用 stdlib pbkdf2_hmac（SHA-256, 10 万次迭代）
-_AUTH_SALT_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), ".auth_salt"
-)
+# 盐值同样与数据放一起，理由同上。
+_AUTH_SALT_FILE = os.path.join(paths.BASE_DIR, ".auth_salt")
 if AUTH_ENABLED:
     if not os.path.exists(_AUTH_SALT_FILE):
         with open(_AUTH_SALT_FILE, "w", encoding="utf-8") as _f:
@@ -355,12 +362,17 @@ def api_restore():
     return jsonify({"ok": True})
 
 
-if __name__ == "__main__":
+def main():
+    """Web 版启动入口（控制台命令 question-notebook-web 与 python -m question_notebook.web 都调用它）。"""
     print("问题笔记本 Web 版已启动：http://127.0.0.1:5000")
     if AUTH_ENABLED:
         print("认证已启用（登录密码来自 QUESTION_NOTEBOOK_PASSWORD 环境变量）")
     else:
         print("提示：未设置 QUESTION_NOTEBOOK_PASSWORD，认证未启用（仅本机访问）")
-        print("  局域网部署前请设置密码：QUESTION_NOTEBOOK_PASSWORD=你的密码 python web_app.py")
+        print("  局域网部署前请设置密码：QUESTION_NOTEBOOK_PASSWORD=你的密码 question-notebook-web")
     print("按 Ctrl+C 停止服务")
     app.run(debug=False, host='127.0.0.1', port=5000)
+
+
+if __name__ == "__main__":
+    main()

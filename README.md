@@ -58,29 +58,34 @@ CLI 与 Web 两个前端共享同一数据层与数据库文件，数据完全�
 | 数据 | 备份与恢复 | 带时间戳快照备份（.db 副本），覆盖前二次确认 |
 | 数据 | 导出 CSV | UTF-8 BOM 编码，Excel 直接打开无乱码 |
 | 数据 | 数据可视化 | 分类分布柱状图 + 解决率环形图，原生 Canvas 绘制，零第三方依赖 |
-| 兼容 | 迁移工具 | 提供 `migrate_to_sqlite.py`，将历史 `questions.json` 一键迁入 SQLite |
+| 兼容 | 迁移工具 | 提供 `scripts/migrate_to_sqlite.py`，将历史 `questions.json` 一键迁入 SQLite |
 | 安全 | 密码认证 | 可选：设置环境变量后启用登录，密码 PBKDF2 哈希存储 |
 | 安全 | CSRF 防护 | 所有写操作校验 X-CSRF-Token，防止跨站请求伪造 |
 
 ## 架构设计
 
-项目采用**分层模块化**设计，遵循单一职责原则：
+项目采用**分层模块化**设计，代码集中在 `src/question_notebook/` 包内，遵循单一职责原则：
 
 ```
-┌─────────────────────────────────────────────┐
-│                 界面层（表现层）               │
-│  ┌─────────────────┐  ┌─────────────────┐  │
-│  │  CLI 命令行界面  │  │  Web 界面 (Flask)│  │
-│  │ question_       │  │ web_app.py      │  │
-│  │ notebook.py     │  │ + index.html    │  │
-│  └────────┬────────┘  └────────┬────────┘  │
-└───────────┼────────────────────┼───────────┘
-            │       调用         │
-┌───────────┴────────────────────┴───────────┐
-│                数据层（models.py）           │
-│  Question 模型 · 序列化 · SQLite 读写        │
-│  （含损坏自动备份、schema 自举建表）         │
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│                  界面层（表现层）                  │
+│  ┌─────────────────┐    ┌──────────────────┐    │
+│  │  CLI 命令行界面  │    │  Web 界面 (Flask) │    │
+│  │  cli.py         │    │  web.py          │    │
+│  └────────┬────────┘    │  + templates/    │    │
+│           │             └────────┬─────────┘    │
+└───────────┼──────────────────────┼──────────────┘
+            │        调用           │
+┌───────────▼──────────────────────▼──────────────┐
+│              数据层（models.py）                  │
+│  Question 模型 · 序列化 · SQLite 读写             │
+│  （含损坏自动备份、schema 自举建表）               │
+└───────────────────────┬──────────────────────────┘
+                        │ 路径从哪来？
+              ┌─────────▼──────────┐
+              │   paths.py         │
+              │  数据/密钥位置唯一来源│
+              └────────────────────┘
 ```
 
 **设计原则：**
@@ -88,6 +93,7 @@ CLI 与 Web 两个前端共享同一数据层与数据库文件，数据完全�
 - **单一职责**：数据层只负责数据存取，界面层只负责交互展示
 - **依赖单向**：界面层依赖数据层，数据层不依赖任何界面实现
 - **存储隔离**：数据存取逻辑集中在 `models.py`，未来迁移至 PostgreSQL 时界面层无需改动
+- **路径唯一来源**：数据文件与密钥的位置只在 `paths.py` 定义一次，代码目录与数据目录严格分离
 
 ## 技术栈
 
@@ -97,7 +103,7 @@ CLI 与 Web 两个前端共享同一数据层与数据库文件，数据完全�
 | Web 框架 | Flask ≥ 2.3 | 轻量级 WSGI 应用框架（2.3+ 才支持 `app.json.ensure_ascii`） |
 | 前端 | 原生 HTML/CSS/JavaScript | 无框架依赖，深色响应式界面 |
 | 存储 | SQLite | 标准库 `sqlite3`，单文件数据库，零配置 |
-| 测试 | pytest / unittest | 37 个用例；也可直接 `python test_qn.py` 零依赖运行 |
+| 测试 | pytest / unittest | 37 个用例；也可直接 `python tests/test_question_notebook.py` 零依赖运行 |
 | 代码检查 | ruff | 静态检查（E/W/F/I 规则）+ 格式化，配置见 `pyproject.toml` |
 | CI | GitHub Actions | 四版本 Python 矩阵自动测试 + ruff 检查 |
 
@@ -113,41 +119,61 @@ CLI 与 Web 两个前端共享同一数据层与数据库文件，数据完全�
 依赖声明在 `requirements.txt`，一条命令装齐：
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 > 只有开发/改代码时才需要额外工具（ruff 挑错 + pytest 测试）：
 > ```bash
-> pip install -r requirements-dev.txt
+> python -m pip install -r requirements-dev.txt
 > ```
 
 ### 启动 CLI
 
 ```bash
-python question_notebook.py
+python run_cli.py
 ```
 
 ### 启动 Web
 
 ```bash
-python web_app.py
+python run_web.py
 ```
 
 启动后浏览器访问 **http://127.0.0.1:5000**。
 
 首次运行会在项目根目录自动创建 SQLite 数据库 `questions.db`（首次写入时建表）。
 
+### 三种启动方式（等价，按需选）
+
+代码采用 **src 布局**（代码在 `src/question_notebook/`，数据与配置在根目录）。因此未安装时不能直接 `python -m question_notebook`，需要按下面任一方式启动：
+
+| 方式 | 命令 | 前提 |
+|------|------|------|
+| **① 启动脚本**（推荐） | `python run_cli.py`<br>`python run_web.py` | 只需装 Flask |
+| **② 模块方式** | `python -m question_notebook`<br>`python -m question_notebook.web` | 需先 `pip install -e .`（或 `src` 已在 `PYTHONPATH` 中） |
+| **③ 控制台命令** | `question-notebook`<br>`question-notebook-web` | 需先 `pip install -e .` |
+
+三种方式最终都调用同一个函数（CLI 为 `question_notebook.cli.main`，Web 为 `question_notebook.web.main`），行为完全一致。
+
+若要安装（可获得方式 ②③，开发时推荐可编辑安装）：
+
+```bash
+python -m pip install -e .
+```
+
+> 说明：可编辑安装需要 `setuptools` 与可用的软件源。本项目的开发环境中这两者均不可用，因此**安装路径未经实际验证**；上面三种方式中的 ① 已实测可用，且不依赖任何安装步骤。
+
 ### 从旧版 JSON 迁移（可选）
 
 若你用过 v0.1.x 的 JSON 存储版本，升级到 v0.2.0 后可用迁移脚本把 `questions.json` 一键导入 SQLite：
 
 ```bash
-python migrate_to_sqlite.py             # 执行迁移
-python migrate_to_sqlite.py --dry-run   # 仅预览，不写库
-python migrate_to_sqlite.py --force     # 覆盖已存在的 questions.db（先备份）
+python scripts/migrate_to_sqlite.py             # 执行迁移
+python scripts/migrate_to_sqlite.py --dry-run   # 仅预览，不写库
+python scripts/migrate_to_sqlite.py --force     # 覆盖已存在的 questions.db（先备份）
 ```
 
-迁移会：备份原 JSON 到 `backups/` → 应用 `schema.sql` 建表 → 单事务导入数据 → 读回校验。原有 ID 完整保留。迁移确认无误后可删除 `questions.json`。
+迁移会：备份原 JSON 到 `backups/` → 应用包内 `schema.sql` 建表 → 单事务导入数据 → 读回校验。原有 ID 完整保留。迁移确认无误后可删除 `questions.json`。
 
 ### 启用密码认证（可选）
 
@@ -155,11 +181,13 @@ Web 版默认**免登录**（仅适合本机 `127.0.0.1` 使用）。若要在�
 
 ```bash
 # Linux / macOS
-QUESTION_NOTEBOOK_PASSWORD=你的密码 python web_app.py
+QUESTION_NOTEBOOK_PASSWORD=你的密码 python run_web.py
 
 # Windows (PowerShell)
-$env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python web_app.py
+$env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python run_web.py
 ```
+
+> 安装后也可用控制台命令：`QUESTION_NOTEBOOK_PASSWORD=你的密码 question-notebook-web`
 
 | 环境变量 | 说明 |
 |---------|------|
@@ -205,7 +233,23 @@ $env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python web_app.py
 
 ## 数据存储
 
-数据存储于项目根目录的 SQLite 数据库 `questions.db`，单文件、零配置。表结构定义在 [schema.sql](schema.sql)（`models.py` 内部也内联了一份等价的建表 SQL，确保无 schema.sql 时仍能自举建库）。
+数据默认存储于**项目根目录**的 SQLite 数据库 `questions.db`，单文件、零配置。表结构定义在 [src/question_notebook/schema.sql](src/question_notebook/schema.sql)（`models.py` 内部也内联了一份等价的建表 SQL，确保无 schema.sql 时仍能自举建库）。
+
+**数据与密钥的位置可配置**，规则统一由 `src/question_notebook/paths.py` 决定：
+
+| 环境变量 | 作用 | 默认值 |
+|---------|------|--------|
+| `QUESTION_NOTEBOOK_DATA_DIR` | 数据目录（`questions.db`、`backups/`、`exports/`、`.flask_secret`、`.auth_salt` 都基于它） | 项目根目录 |
+
+```bash
+# 把数据放到项目外的独立目录（例如部署到服务器时）
+# Windows PowerShell
+$env:QUESTION_NOTEBOOK_DATA_DIR="D:\qn-data"; python run_cli.py
+# Linux / macOS
+QUESTION_NOTEBOOK_DATA_DIR=/var/lib/question-notebook python run_cli.py
+```
+
+> 为什么代码在 `src/` 而数据在根目录？代码目录是可分发的只读资源，数据是"这台机器的状态"。两者混在一起会导致升级或安装时丢失数据，详见 [TUTORIAL.md](TUTORIAL.md) 第 1.8 节。
 
 ### 表结构（`questions` 表）
 
@@ -293,9 +337,11 @@ Web 版提供 RESTful API，所有接口返回 JSON（中文原样输出，无 `
 项目内置 **37 个自动化测试**，覆盖数据层、CLI 界面层与 Web 层（含认证与 CSRF）。两种运行方式结果一致：
 
 ```bash
-python test_qn.py    # 推荐日常用：零依赖，只需 Python 标准库
-pytest               # 装了 pytest 后可用：支持 -k 筛选、--lf 重跑失败项
+python tests/test_question_notebook.py   # 推荐日常用：零依赖，只需 Python 标准库
+pytest                                   # 装了 pytest 后可用：支持 -k 筛选、--lf 重跑失败项
 ```
+
+> 测试文件在 `tests/` 下，会自己把 `src/` 加进模块搜索路径，因此**不需要安装**任何东西即可运行。
 
 pytest 常用参数：
 
@@ -318,37 +364,52 @@ coverage run -m pytest && coverage report -m   # 看测试覆盖率与未覆盖�
 
 ## 项目结构
 
+采用 **src 布局**：代码集中在 `src/question_notebook/` 包内，数据与配置留在根目录。
+
 ```
 question_notebook/
-├── models.py              # 数据层：Question 模型 + SQLite 读写 + 跨进程锁
-├── question_notebook.py   # CLI 界面层
-├── web_app.py             # Web 界面层（Flask 路由）
-├── templates/
-│   └── index.html         # Web 前端页面
-├── schema.sql             # SQLite 表结构定义（建表/索引）
-├── migrate_to_sqlite.py   # JSON → SQLite 一次性迁移脚本
-├── test_qn.py             # 37 个自动化测试（数据层 + CLI + Web）
+├── run_cli.py                 # 启动入口：命令行版（未安装时用，推荐）
+├── run_web.py                 # 启动入口：网页版（未安装时用，推荐）
+├── conftest.py                # pytest 初始化：把 src/ 加进模块搜索路径
+│
+├── src/question_notebook/     # 【代码包】
+│   ├── __init__.py            # 包说明 + 版本号 + 数据层 API 重导出
+│   ├── __main__.py            # python -m question_notebook → CLI
+│   ├── paths.py               # 路径唯一来源（数据/密钥位置，支持环境变量覆盖）
+│   ├── models.py              # 数据层：Question 模型 + SQLite 读写 + 跨进程锁
+│   ├── cli.py                 # CLI 界面层
+│   ├── web.py                 # Web 界面层（Flask 路由）
+│   ├── schema.sql             # SQLite 表结构定义（建表/索引）
+│   └── templates/
+│       └── index.html         # Web 前端页面
+│
+├── tests/
+│   └── test_question_notebook.py   # 37 个自动化测试（数据层 + CLI + Web）
 ├── scripts/
-│   └── check_deps.py      # 依赖声明一致性校验（CI 使用）
+│   ├── check_deps.py          # 依赖声明一致性校验（CI 使用）
+│   └── migrate_to_sqlite.py   # JSON → SQLite 一次性迁移脚本
+│
 ├── .github/workflows/
-│   └── ci.yml             # CI：ruff 检查 + 四版本 Python 测试矩阵
-├── pyproject.toml         # 项目配置（依赖 + ruff/pytest/coverage 配置）
-├── requirements.txt       # 运行依赖（Flask）
-├── requirements-dev.txt   # 开发依赖（ruff + pytest + coverage）
-├── .editorconfig          # 编辑器格式约定（缩进/编码/换行符）
-├── .gitignore             # 排除私人数据、缓存与临时产物
-├── .gitmessage            # 提交信息模板
-├── questions.db           # SQLite 数据库（首次运行自动生成，不入版本库）
-├── .flask_secret          # Flask 会话签名密钥（首次运行自动生成，不入版本库）
-├── .auth_salt             # 密码哈希盐（启用认证后自动生成，不入版本库）
-├── .tmp/                  # 测试临时目录（跑测试时自动创建并清理）
-├── backups/               # 备份目录（.db 快照，备份时自动创建，不入版本库）
-├── exports/               # CSV 导出目录（导出时自动创建，不入版本库）
-├── ROADMAP.md             # 路线图（版本规划与演进方向）
-├── STANDARDS.md           # 工程规范（依赖/风格/测试/CI/提交，含新手解释）
-├── TUTORIAL.md            # 教学文档（代码讲解 + 动手练习）
-├── CODE_WIKI.md           # 代码级知识库（模块职责 + 关键函数）
-└── README.md              # 项目文档
+│   └── ci.yml                 # CI：ruff 检查 + 四版本 Python 测试矩阵
+├── pyproject.toml             # 项目配置（依赖 + 启动命令 + ruff/pytest/coverage 配置）
+├── requirements.txt           # 运行依赖（Flask）
+├── requirements-dev.txt       # 开发依赖（ruff + pytest + coverage）
+├── .editorconfig              # 编辑器格式约定（缩进/编码/换行符）
+├── .gitignore                 # 排除私人数据、缓存与临时产物
+├── .gitmessage                # 提交信息模板
+│
+├── questions.db               # SQLite 数据库（首次运行自动生成，不入版本库）
+├── .flask_secret              # Flask 会话签名密钥（自动生成，不入版本库）
+├── .auth_salt                 # 密码哈希盐（启用认证后自动生成，不入版本库）
+├── .tmp/                      # 测试临时目录（跑测试时自动创建并清理）
+├── backups/                   # 备份目录（.db 快照，自动创建，不入版本库）
+├── exports/                   # CSV 导出目录（自动创建，不入版本库）
+│
+├── ROADMAP.md                 # 路线图（版本规划与演进方向）
+├── STANDARDS.md               # 工程规范（依赖/风格/测试/CI/提交，含新手解释）
+├── TUTORIAL.md                # 教学文档（代码讲解 + 动手练习，面向新手）
+├── CODE_WIKI.md               # 代码级知识库（模块职责 + 关键函数）
+└── README.md                  # 项目文档
 ```
 
 ## 路线图
@@ -359,11 +420,35 @@ question_notebook/
 |------|------|------|
 | v0.1.0 | 个人工具（CLI + Web + 模块化） | ✅ 已发布 |
 | v0.2.0 | 数据升级（SQLite 迁移） | ✅ 已完成 |
+| v0.2.x | 数据可视化 + 工程规范化 | ✅ 已完成 |
+| v0.3.0 | 标准化包结构（src 布局） | 🚧 进行中 |
 | v0.3.0 | 社区化（用户系统 + 问答） | 📋 规划中 |
 | v0.4.0 | 社会问题采集（数据接入） | 📋 规划中 |
 | v1.0.0 | 关联与发布（平台化） | 📋 规划中 |
 
 ## 更新日志
+
+### 2026-09-26 · v0.3.0 标准化包结构（src 布局重组）
+
+**目录结构（本次为破坏性变更，旧的文件路径已不存在）**
+- 代码迁入 `src/question_notebook/` 包：`question_notebook.py` → `cli.py`、`web_app.py` → `web.py`、`models.py` 与 `schema.sql`、`templates/` 一并入包
+- 测试迁入 `tests/test_question_notebook.py`（原 `test_qn.py`）；迁移脚本迁入 `scripts/migrate_to_sqlite.py`
+- 新增 `src/question_notebook/__init__.py`（包说明 + `__version__` + 数据层 API 重导出，导入时不加载 Flask）、`__main__.py`（支持 `python -m question_notebook`）
+
+**路径与数据安全**
+- 新增 `src/question_notebook/paths.py`：路径的**唯一来源**，把"代码目录"与"数据目录"彻底分开
+- 数据默认仍在项目根目录（你的 `questions.db` 无需搬家），新增 `QUESTION_NOTEBOOK_DATA_DIR` 环境变量可整体改写数据位置
+- `.flask_secret` 与 `.auth_salt` 由代码目录移到数据目录：密钥属于"机器状态"，不该随代码分发或写进安装目录
+
+**启动方式（原 `python question_notebook.py` / `python web_app.py` 已不可用）**
+- 新增 `run_cli.py` / `run_web.py`：未安装即可用的启动入口（会引导模块搜索路径）
+- `pyproject.toml` 注册控制台命令 `question-notebook` 与 `question-notebook-web`（src 布局打包配置 + 非 Python 文件声明）
+- 三种方式最终都调用同一个 `main()`，行为一致
+
+**测试与工具**
+- 测试文件与 `conftest.py` 自带路径引导，**不安装任何东西**即可运行；`pyproject.toml` 增加 `pythonpath = ["src"]`
+- 迁移脚本改为从包内定位 `schema.sql`，并以 `paths.DATA_DIR` 为数据基准
+- 37 个测试全部通过（数据层 / CLI / Web 覆盖范围不变）
 
 ### 2026-09-26 · v0.2.2 工程规范化
 
@@ -384,7 +469,7 @@ question_notebook/
   （原实现在沙箱/部分 CI 容器中因系统临时目录不可写而整个测试套件失败）
 - 抽出公共基类 `QuestionNotebookTestCase`：统一临时目录重定向与输出降噪，三个测试类不再重复代码
 - 测试输出自动静音 CLI 菜单打印，结尾输出一行结论（`共 37 项 | 通过 37 项`），结果一眼可见
-- 支持 pytest 与 `python test_qn.py` 两种运行方式，结果一致
+- 支持 pytest 与直接运行测试文件两种方式，结果一致
 
 **CI 与协作规范**
 - 新增 [.github/workflows/ci.yml](.github/workflows/ci.yml)：ruff 检查 + Python 3.10/3.11/3.12/3.13 四版本测试矩阵，两种运行方式都验证

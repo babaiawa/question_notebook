@@ -22,7 +22,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "question-notebook"
-version = "0.2.2"
+version = "0.3.0"
 description = "问题笔记本：个人问题记录与知识管理工具（CLI + Web 双端）"
 readme = "README.md"
 # requires-python 是「最低 Python 版本」的硬性声明。
@@ -41,7 +41,7 @@ classifiers = [
 
 # 运行本项目**必需**的第三方包。没装这些，程序跑不起来。
 dependencies = [
-    "Flask>=2.3",  # web_app.py 用它提供网页界面；2.3+ 才有 app.json.ensure_ascii
+    "Flask>=2.3",  # src/question_notebook/web.py 用它提供网页界面；2.3+ 才有 app.json.ensure_ascii
 ]
 
 # 可选依赖：只在「开发/测试」时需要，普通用户不用装。
@@ -54,13 +54,41 @@ dev = [
 ]
 
 # -----------------------------------------------------------------------------
-# 注意：本项目采用「平铺式」布局（models.py / question_notebook.py / web_app.py
-# 都直接在根目录），不注册命令行入口点（console_scripts）。
-# 原因：入口点要求项目是一个可导入的包，那需要先做目录结构重组（= 高风险改动）。
-# 启动方式保持原样，见 README「快速开始」：
-#     python question_notebook.py      # 命令行版
-#     python web_app.py                # 网页版
+# 控制台命令（安装后可用）
+#
+# 格式：命令名 = "包.模块:函数"
+# 等号右边表示"运行这个命令时，调用哪个函数"。
+#
+# 安装方式：
+#     pip install -e .        # 可编辑安装：改代码后无需重装即生效（开发用）
+#     pip install .           # 普通安装（部署用）
+#
+# 安装前也能用（在项目根目录执行，靠 Python 自动把当前目录加进模块搜索路径）：
+#     python -m question_notebook          # 等价于 question-notebook
+#     python -m question_notebook.web      # 等价于 question-notebook-web
 # -----------------------------------------------------------------------------
+[project.scripts]
+question-notebook = "question_notebook.cli:main"
+question-notebook-web = "question_notebook.web:main"
+
+# -----------------------------------------------------------------------------
+# 打包配置：告诉 setuptools「代码在 src/ 下，不要到别处乱找」
+#
+# src 布局（src layout）是现代 Python 的推荐做法：
+#   - 代码统一放在 src/ 下，仓库根目录只留配置、文档、测试与数据
+#   - 能防止"在当前目录直接 import 到未安装的代码"这类假象问题，
+#     逼着测试走真实的包导入路径，避免在开发时掩盖打包错误
+# -----------------------------------------------------------------------------
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# 非 Python 文件（Web 模板与建表 SQL）必须显式声明，否则打包后会丢失，
+# 出现"代码装上了但网页打不开/建不了表"的怪问题。
+[tool.setuptools.package-data]
+question_notebook = ["templates/*.html", "schema.sql"]
 
 # =============================================================================
 # ruff：代码校对员配置
@@ -89,12 +117,16 @@ select = ["E", "W", "F", "I"]
 
 # 忽略的规则（逐条说明为什么）：
 #   E501 = 单行超长。中文注释和文档字符串本来就容易超长，强制断行会伤害可读性。
-#   E402 = import 不在文件顶部。test_qn.py 必须先 sys.path.insert() 再 import，
-#          这是测试文件的标准写法，属于有意为之。
+#   E402 = import 不在文件顶部。以下文件必须先 sys.path.insert() 把 src/ 加进
+#          模块搜索路径，再导入本项目包，顺序不可调换，因此属于有意豁免：
+#          run_cli.py、run_web.py、conftest.py、tests/test_question_notebook.py、
+#          scripts/migrate_to_sqlite.py
 ignore = ["E501", "E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["models", "question_notebook", "web_app", "migrate_to_sqlite"]
+# 第一方（本项目自己的）模块：现在代码全在 question_notebook 包内，
+# 因此只有包名一个；包内互相导入一律用相对导入，不会走到这里。
+known-first-party = ["question_notebook"]
 
 # =============================================================================
 # pytest：测试运行器配置
@@ -105,18 +137,22 @@ known-first-party = ["models", "question_notebook", "web_app", "migrate_to_sqlit
 #   pytest --lf                # 只重跑上次失败的用例
 # =============================================================================
 [tool.pytest.ini_options]
-testpaths = ["."]              # 从项目根目录找测试
+testpaths = ["tests"]          # 只到 tests/ 目录里找测试
 python_files = ["test_*.py"]   # 文件名匹配 test_*.py 的才算测试文件
 python_classes = ["Test*"]     # 类名以 Test 开头的才算测试类
 python_functions = ["test_*"]  # 函数名以 test_ 开头的才算测试用例
 addopts = "-v --tb=short"      # 默认详细输出 + 简短错误回溯
+# 代码在 src/ 下，测试要能 import question_notebook，
+# 因此把 src 加进搜索路径（与根目录 conftest.py 的作用一致，双保险）
+pythonpath = ["src"]
 
 # =============================================================================
 # coverage：测试覆盖率（可选工具，回答「测试到底覆盖了多少行代码」）
 # 用法：coverage run -m pytest && coverage report -m
 # =============================================================================
 [tool.coverage.run]
-source = ["models", "question_notebook", "web_app"]
+# 代码全在 src/question_notebook/ 包内，这里写包名即可（不再是平铺的模块名）
+source = ["question_notebook"]
 branch = true   # 同时统计「分支覆盖」：if/else 两边是否都被测到
 
 [tool.coverage.report]

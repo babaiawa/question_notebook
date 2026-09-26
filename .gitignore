@@ -90,6 +90,16 @@ exports/
 # 测试用的临时目录（测试运行完自动清理）
 .tmp/
 
+# ---------- 打包产物（src 布局相关）----------
+
+# `python -m src.question_notebook` 这种写法会把 src/ 当成一层命名空间，
+# Python 会在 src/ 下生成 __pycache__（上面的 __pycache__/ 规则已覆盖，
+# 此处再显式写一遍，避免将来规则被改写时漏掉这个位置）
+src/__pycache__/
+
+# 本地数据目录（若用 QUESTION_NOTEBOOK_DATA_DIR 指到仓库内的目录）
+data/
+
 # ---------- 编辑器 / 系统垃圾文件 ----------
 
 # 编辑器个人配置（每人不同，不入库）

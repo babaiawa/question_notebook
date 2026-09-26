@@ -31,51 +31,76 @@ Question Notebook 是一个**轻量级个人问题记录与知识管理工具**�
 | 维度 | 说明 |
 |------|------|
 | 双端界面 | CLI 命令行 + Web 浏览器界面，共享同一数据层 |
-| 分层架构 | 数据层（`models.py`）与界面层（CLI / Web）解耦 |
+| 分层架构 | 路径层（`paths.py`）/ 数据层（`models.py`）/ 界面层（`cli.py` / `web.py`）逐层向上解耦 |
+| 代码布局 | 标准 `src/` 布局：代码在 `src/question_notebook/`，仓库根目录只留配置、文档、测试与用户数据 |
 | 存储方式 | 本地 SQLite 数据库（`questions.db`），单文件零配置，事务保证一致性 |
 | 技术栈 | Python 3.10+ 标准库 + Flask（仅 Web 端需要） |
-| 测试 | 标准库 `unittest` 编写，`pytest` 与 `python test_qn.py` 两种方式均可运行（37 用例），测试数据隔离到项目内 `.tmp/` |
+| 版本 | 0.3.0（`pyproject.toml` 与 `question_notebook.__version__` 一致） |
+| 测试 | 标准库 `unittest` 编写，`pytest` 与 `python tests/test_question_notebook.py` 两种方式均可运行（37 用例），测试数据隔离到项目内 `.tmp/` |
 | 工程规范 | `pyproject.toml` 声明依赖并集中 ruff / pytest / coverage 配置，配套 `requirements*.txt` 与 GitHub Actions CI（详见 [STANDARDS.md](STANDARDS.md)） |
 
 ---
 
 ## 2. 目录结构
 
+v0.3.0 起项目采用**标准 `src/` 布局**：代码统一收进 `src/question_notebook/` 包内，仓库根目录只留启动入口、配置、文档、测试与用户数据。
+
 ```
-question_notebook/
-├── models.py              # 数据层：Question 模型 + SQLite 读写 + 跨进程锁
-├── question_notebook.py   # CLI 界面层
-├── web_app.py             # Web 界面层（Flask 路由 + 认证 + CSRF）
-├── test_qn.py             # 自动化测试（数据层 + CLI 层 + Web 层）
-├── templates/
-│   └── index.html         # Web 前端页面（内嵌 CSS + JS + 登录页 + 数据可视化面板）
-├── schema.sql             # SQLite 建表脚本（questions 表 + 索引 + schema_meta）
-├── migrate_to_sqlite.py   # 一次性迁移脚本：questions.json → questions.db
-├── questions.db           # SQLite 数据文件（首次写入时自动创建并建表）
-├── .flask_secret          # Flask 会话签名密钥（首次运行自动生成）
-├── .auth_salt             # 密码哈希盐（启用认证后自动生成）
-├── backups/               # 备份目录（备份时自动创建）
-├── exports/               # CSV 导出目录（导出时自动创建）
-├── .tmp/                  # 测试临时目录（每个用例自建唯一子目录，已 gitignore）
-├── pyproject.toml         # 项目元数据 + 依赖声明（权威来源）+ ruff/pytest/coverage 配置
-├── requirements.txt       # 运行依赖清单（Flask>=2.3）
-├── requirements-dev.txt   # 开发依赖清单（ruff / pytest / coverage）
+question_notebook/                     # 项目根目录（git clone 下来的那个目录）
+├── run_cli.py                         # 未安装时的 CLI 入口：python run_cli.py
+├── run_web.py                         # 未安装时的 Web 入口：python run_web.py
+├── conftest.py                        # pytest 全局初始化：把 src/ 加进 sys.path
+├── pyproject.toml                     # 项目元数据 + 依赖声明（权威来源）+ [project.scripts] 控制台命令 + setuptools src 配置 + ruff/pytest/coverage 配置
+├── requirements.txt                   # 运行依赖清单（Flask>=2.3）
+├── requirements-dev.txt               # 开发依赖清单（ruff / pytest / coverage）
+├── questions.db                       # 用户真实数据（SQLite，首次写入时自动创建并建表）——仍在仓库根目录，未随代码移动
+├── backups/                           # 备份目录（备份时自动创建）
+├── exports/                           # CSV 导出目录（导出时自动创建）
+├── .tmp/                              # 测试临时目录（每个用例自建唯一子目录，已 gitignore）
+├── src/
+│   └── question_notebook/             # ← 代码包
+│       ├── __init__.py                # 包文档字符串 + __version__ = "0.3.0" + 重导出数据层 API（导入时不加载 Flask）
+│       ├── __main__.py                # python -m question_notebook → cli.main()
+│       ├── paths.py                   # 路径解析：数据文件与环境相关路径的唯一来源
+│       ├── models.py                  # 数据层：Question 模型 + SQLite 读写 + 跨进程锁
+│       ├── cli.py                     # CLI 界面层
+│       ├── web.py                     # Web 界面层（Flask 路由 + 认证 + CSRF）
+│       ├── schema.sql                 # SQLite 建表脚本（questions 表 + 索引 + schema_meta）
+│       └── templates/
+│           └── index.html             # Web 前端页面（内嵌 CSS + JS + 登录页 + 数据可视化面板）
+├── tests/
+│   └── test_question_notebook.py      # 自动化测试（数据层 + CLI 层 + Web 层）
 ├── scripts/
-│   └── check_deps.py      # 校验 pyproject.toml 与 requirements.txt 的依赖声明一致
+│   ├── check_deps.py                  # 校验 pyproject.toml 与 requirements.txt 的依赖声明一致
+│   └── migrate_to_sqlite.py           # 一次性迁移脚本：questions.json → questions.db
 ├── .github/
 │   └── workflows/
-│       └── ci.yml         # CI 流水线：ruff 检查 + 依赖一致性校验 + Python 3.10~3.13 测试矩阵
-├── .editorconfig          # 编辑器统一格式约定（缩进 / 编码 / 换行符）
-├── .gitmessage            # Git 提交信息模板
-├── README.md              # 项目说明文档
-├── TUTORIAL.md            # 教学文档
-├── ROADMAP.md             # 路线图
-├── STANDARDS.md           # 工程规范手册（依赖 / 风格 / 测试 / CI / 提交）
-├── CODE_WIKI.md           # 代码级知识库（本文档）
-└── .gitignore             # Git 忽略规则
+│       └── ci.yml                     # CI 流水线：ruff 检查 + 依赖一致性校验 + Python 3.10~3.13 测试矩阵
+├── .editorconfig                      # 编辑器统一格式约定（缩进 / 编码 / 换行符）
+├── .gitmessage                        # Git 提交信息模板
+├── README.md                          # 项目说明文档
+├── TUTORIAL.md                        # 教学文档
+├── ROADMAP.md                         # 路线图
+├── STANDARDS.md                       # 工程规范手册（依赖 / 风格 / 测试 / CI / 提交）
+├── CODE_WIKI.md                       # 代码级知识库（本文档）
+└── .gitignore                         # Git 忽略规则
 ```
 
-> 运行期动态生成的目录和文件（`backups/`、`exports/`、`.tmp/`、`.flask_secret`、`.auth_salt`、损坏文件的 `.bak`）不在版本控制中。
+> 运行期动态生成的文件（`backups/`、`exports/`、`.tmp/`、`.flask_secret`、`.auth_salt`、`.data.lock`、损坏文件的 `.bak`）不在版本控制中。其中 `.flask_secret`、`.auth_salt`、`.data.lock` 一律生成在**数据目录**（`paths.BASE_DIR`，默认为项目根目录），**不会**写进包目录 `src/question_notebook/`——包目录是代码，应保持只读、可被覆盖升级（详见 §5.1）。
+
+**重组前后的模块改名/移位对照**：
+
+| 重组前（平铺布局） | 重组后（src 布局） | 说明 |
+|------|------|------|
+| `question_notebook.py` | `src/question_notebook/cli.py` | CLI 界面层，已改名 |
+| `web_app.py` | `src/question_notebook/web.py` | Web 界面层，已改名 |
+| `models.py` | `src/question_notebook/models.py` | 内容基本不变，仅改为从 `.paths` 导入路径常量 |
+| `templates/index.html` | `src/question_notebook/templates/index.html` | 随 Web 层移入包内（打包需声明 package-data） |
+| `schema.sql` | `src/question_notebook/schema.sql` | 建表定义属于代码，移入包内 |
+| `test_qn.py` | `tests/test_question_notebook.py` | 测试文件，已改名并移入 `tests/` |
+| `migrate_to_sqlite.py` | `scripts/migrate_to_sqlite.py` | 一次性工具脚本，已移位 |
+| —（原无） | `src/question_notebook/paths.py` | **新增**：路径解析的唯一来源 |
+| —（原无） | `run_cli.py` / `run_web.py` / `conftest.py` / `__main__.py` / `__init__.py` | **新增**：未安装时的启动入口与包初始化 |
 
 ---
 
@@ -84,29 +109,36 @@ question_notebook/
 项目采用**分层模块化**设计，遵循单一职责原则，依赖方向自上而下单向流动：
 
 ```
-┌──────────────────────────────────────────────────┐
-│                    界面层（表现层）                │
-│   ┌──────────────────┐    ┌──────────────────┐   │
-│   │   CLI 命令行界面  │    │  Web 界面 (Flask) │   │
-│   │ question_        │    │  web_app.py      │   │
-│   │ notebook.py      │    │  + templates/    │   │
-│   │                  │    │    index.html    │   │
-│   └────────┬─────────┘    └────────┬─────────┘   │
-└────────────┼───────────────────────┼─────────────┘
-             │        调用            │
-┌────────────▼───────────────────────▼─────────────┐
-│                  数据层（models.py）              │
-│   Question 模型 · to_dict/from_dict 序列化        │
-│   load_questions / save_questions SQLite 读写     │
-│   （含损坏自动备份 .bak、建表幂等、单事务写入）       │
-└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                   界面层（表现层）                    │
+│   ┌────────────────────┐   ┌────────────────────┐    │
+│   │   CLI 命令行界面    │   │  Web 界面 (Flask)  │    │
+│   │   cli.py           │   │  web.py            │    │
+│   │                    │   │  + templates/      │    │
+│   │                    │   │    index.html      │    │
+│   └─────────┬──────────┘   └─────────┬──────────┘    │
+└─────────────┼────────────────────────┼───────────────┘
+              │        调用            │
+┌─────────────▼────────────────────────▼───────────────┐
+│                  数据层（models.py）                  │
+│   Question 模型 · to_dict/from_dict 序列化            │
+│   load_questions / save_questions SQLite 读写         │
+│   （含损坏自动备份 .bak、建表幂等、单事务写入）         │
+└──────────────────────┬───────────────────────────────┘
+                       │  路径常量
+┌──────────────────────▼───────────────────────────────┐
+│                  路径层（paths.py）                   │
+│   PACKAGE_DIR / PROJECT_ROOT（代码在哪）              │
+│   DATA_DIR（环境变量或项目根）· BASE_DIR 为其历史别名  │
+│   DATA_FILE / BACKUP_DIR / EXPORT_DIR / SCHEMA_FILE   │
+└──────────────────────────────────────────────────────┘
 ```
 
 **三条设计原则：**
 
-1. **单一职责**：数据层只负责"数据长什么样、怎么存取"；界面层只负责输入输出、菜单、路由。
-2. **依赖单向**：界面层依赖数据层，数据层不依赖任何界面实现。
-3. **存储隔离**：数据库读写集中在 `models.py`，未来若迁移到 PostgreSQL 等其他数据库时界面层零改动。
+1. **单一职责**：路径层只回答"文件放哪"；数据层只负责"数据长什么样、怎么存取"；界面层只负责输入输出、菜单、路由。
+2. **依赖单向**：界面层依赖数据层，数据层依赖路径层，路径层不依赖任何上层实现。
+3. **存储隔离**：数据库读写集中在 `models.py`，未来若迁移到 PostgreSQL 等其他数据库时界面层零改动；数据位置集中在 `paths.py`，换部署目录（如 `QUESTION_NOTEBOOK_DATA_DIR`）时其余模块零改动。
 
 **分层带来的收益：** CLI 与 Web 共享同一份数据逻辑，改 bug 只改一处；同一份 `questions.db` 在两个界面间数据完全互通。
 
@@ -118,34 +150,44 @@ question_notebook/
 
 | 模块 | 层级 | 职责 |
 |------|------|------|
-| `models.py` | 数据层 | 定义 `Question` 模型、序列化/反序列化、SQLite 读写、跨进程写锁、路径常量 |
-| `question_notebook.py` | 界面层（CLI） | 命令行菜单循环、交互式增删改查、备份恢复、CSV 导出、分类浏览 |
-| `web_app.py` | 界面层（Web） | Flask 应用、REST 路由、密码认证、CSRF 防护、HTTP 请求校验与响应、导出/备份/恢复接口 |
-| `templates/index.html` | 界面层（前端） | 浏览器渲染、登录页、`fetch` 调用 API、搜索筛选、模态框交互 |
-| `test_qn.py` | 测试层 | 数据层、CLI 层与 Web 层（含认证与 CSRF）的自动化测试，测试数据隔离 |
-| `pyproject.toml` | 工程配置 | 项目元数据、运行/开发依赖声明（权威来源）、ruff / pytest / coverage 配置 |
+| `paths.py` | 路径层 | 解析并导出全部路径常量（`PACKAGE_DIR` / `PROJECT_ROOT` / `DATA_DIR` / `BASE_DIR` / `DATA_FILE` / `BACKUP_DIR` / `EXPORT_DIR` / `SCHEMA_FILE` / `TEMPLATE_DIR`），是"文件放哪"的**唯一来源** |
+| `models.py` | 数据层 | 定义 `Question` 模型、序列化/反序列化、SQLite 读写、跨进程写锁；路径常量一律 `from .paths import ...` |
+| `cli.py` | 界面层（CLI） | 命令行菜单循环、交互式增删改查、备份恢复、CSV 导出、分类浏览；`main()` 为 CLI 入口 |
+| `web.py` | 界面层（Web） | Flask 应用、REST 路由、密码认证、CSRF 防护、HTTP 请求校验与响应、导出/备份/恢复接口；`main()` 为 Web 入口 |
+| `src/question_notebook/templates/index.html` | 界面层（前端） | 浏览器渲染、登录页、`fetch` 调用 API、搜索筛选、模态框交互（包内模板，打包需 `package-data` 声明） |
+| `__init__.py` | 包初始化 | 包文档字符串、`__version__ = "0.3.0"`、重导出数据层 API（**导入时不加载 Flask**） |
+| `__main__.py` | 包入口 | `python -m question_notebook` → `cli.main()` |
+| `run_cli.py` / `run_web.py` | 启动入口（仓库根） | 未安装时把 `src/` 插入 `sys.path`，再调用 `cli.main` / `web.main` |
+| `conftest.py` | 工程配置（仓库根） | pytest 收集前把 `src/` 插入 `sys.path`，保证未安装也能跑测试 |
+| `tests/test_question_notebook.py` | 测试层 | 数据层、CLI 层与 Web 层（含认证与 CSRF）的自动化测试，测试数据隔离 |
+| `pyproject.toml` | 工程配置 | 项目元数据与版本、依赖声明（权威来源）、`[project.scripts]` 控制台命令、setuptools src 打包配置、ruff / pytest / coverage 配置 |
 | `requirements.txt` / `requirements-dev.txt` | 工程配置 | 依赖清单简写：运行依赖（Flask）与开发依赖（ruff / pytest / coverage） |
 | `scripts/check_deps.py` | 工程工具 | 比对 `pyproject.toml` 与 `requirements.txt` 的依赖包名是否一致，不一致退出码 1（CI 调用） |
+| `scripts/migrate_to_sqlite.py` | 工程工具 | 一次性迁移脚本：`questions.json` → `questions.db`（自带 `sys.path` 引导） |
 | `.github/workflows/ci.yml` | 工程配置 | CI：ruff 检查、依赖一致性校验、Python 3.10/3.11/3.12/3.13 矩阵测试 |
 | `STANDARDS.md` | 文档 | 工程规范手册（依赖 / 风格 / 测试 / CI / 提交 / 版本约定） |
 
 ### 4.2 依赖关系图
 
 ```
-test_qn.py ──────────► models.py
-     │                      ▲
-     └────────► question_notebook.py ──► models.py
-                                         ▲
-web_app.py ─────────────────────────────┘
-     ▲
-     └────────► templates/index.html（通过 HTTP/fetch 间接调用）
+run_cli.py ──► cli.py ──┐
+__main__.py ─► cli.py ──┼──► models.py ──► paths.py
+run_web.py ──► web.py ──┘        ▲
+                                 │
+tests/test_question_notebook.py ─┘（导入 cli / models；Web 测试内再 `from question_notebook import web`）
+
+web.py ──► 包内 templates/index.html（Flask 渲染模板）
+                 ▲
+                 └── 前端再通过 HTTP/fetch 间接调用 web.py 暴露的 REST API
 ```
 
 关键依赖说明：
 
-- `question_notebook.py` 与 `web_app.py` 都通过 `from models import ...` 复用数据层。
-- `test_qn.py` 同时导入 `models` 与 `question_notebook as cli` 进行测试。
-- 前端 `index.html` 不直接 import 后端，而是通过 `fetch` 调用 `web_app.py` 暴露的 REST API。
+- `cli.py` 与 `web.py` 都通过包内相对导入 `from .models import ...` 复用数据层；`cli.py` 另有 `from . import models`，`web.py` 另有 `from . import paths`。
+- `models.py` 通过 `from .paths import (BACKUP_DIR, BASE_DIR, DATA_FILE, EXPORT_DIR, PACKAGE_DIR, PROJECT_ROOT, SCHEMA_FILE)` 取得路径常量。
+- 测试文件顶部的 `from question_notebook import cli, models` 直接导入包（先在文件内把 `<root>/src` 插入 `sys.path`）；Web 层测试则用 `from question_notebook import web` **延迟导入**，因此未装 Flask 时只跳过 Web 用例，不影响数据层/CLI 用例。
+- 前端 `index.html` 不直接 import 后端，而是通过 `fetch` 调用 `web.py` 暴露的 REST API。
+- **Flask 只在 `web.py` 中被导入**，包 `__init__.py` 与 `cli.py` 都不碰 Flask，保证只装标准库也能用命令行版。
 
 ### 4.3 导入关系（符号级）
 
@@ -162,33 +204,64 @@ web_app.py ───────────────────────
 | `build_csv` | 函数 | CLI、Web、测试 |
 | `get_stats` | 函数 | Web（统计接口）、测试 |
 | `data_lock` | 上下文管理器 | CLI、Web（写事务加锁） |
-| `DATA_FILE` | 常量 | CLI、Web、测试 |
-| `BACKUP_DIR` | 常量 | CLI、测试 |
-| `EXPORT_DIR` | 常量 | CLI、测试 |
+| `DATA_FILE` | 常量 | CLI（`models.DATA_FILE`）、测试 |
+| `BACKUP_DIR` | 常量 | CLI（`models.BACKUP_DIR`）、测试 |
+| `EXPORT_DIR` | 常量 | CLI（`models.EXPORT_DIR`）、测试 |
+| `BASE_DIR` | 常量 | 数据层内部（锁文件 `.data.lock`、恢复临时文件）；Web 层直接用 `paths.BASE_DIR` |
+| `SCHEMA_FILE` / `PACKAGE_DIR` / `PROJECT_ROOT` | 常量 | 主要给 `paths` 的使用者（如迁移脚本）；`models` 显式重导出以强调"路径唯一来源" |
 | `DEFAULT_CATEGORY` | 常量 | CLI、Web、测试 |
 
-> ⚠️ **值拷贝陷阱（已修正）**：`from models import ...` 只导入**函数**，拿到的是函数对象引用；而路径常量（`DATA_FILE` / `BACKUP_DIR` / `EXPORT_DIR` / `BASE_DIR`）在 `question_notebook.py` 中一律通过 `models.DATA_FILE`、`models.BACKUP_DIR` 等**模块属性**在调用时动态读取（见 `question_notebook.py` 的 `import models` 及各函数体），`web_app.py` 则不直接引用路径常量。
+> ⚠️ **值拷贝陷阱（已修正）**：`from .models import ...` 只导入**函数**（以及 `DEFAULT_CATEGORY`），拿到的是函数对象引用；而路径常量（`DATA_FILE` / `BACKUP_DIR` / `EXPORT_DIR` / `BASE_DIR`）在 `cli.py` 中一律通过 `models.DATA_FILE`、`models.BACKUP_DIR` 等**模块属性**在调用时动态读取（见 `cli.py` 的 `from . import models` 及各函数体），`web.py` 则通过 `paths.BASE_DIR` 读取密钥/盐文件位置。
 >
-> 因此测试只需重定向 **`models` 模块命名空间中的四个路径常量**（见 `test_qn.py` 基类 `QuestionNotebookTestCase.setUp`），**不存在"必须同时更新 `cli.DATA_FILE`"的双边同步要求**——`cli` 模块并不持有这些常量的值拷贝。
+> 这些常量的**定义处**是 `paths.py`，再由 `models.py` 用 `from .paths import ...` 复制进 `models` 命名空间。因此测试只需重定向 **`models` 模块命名空间中的四个路径常量**（见 `tests/test_question_notebook.py` 基类 `QuestionNotebookTestCase.setUp`），**不存在"必须同时更新 `cli.DATA_FILE`"的双边同步要求**——`cli` 模块并不持有这些常量的值拷贝。
 
 ---
 
 ## 5. 关键类与函数详解
 
-### 5.1 models.py（数据层）
+### 5.1 paths.py（路径解析层）
+
+**v0.3.0 新增模块**，专门回答"文件到底放在哪"。计算结果都在**导入时**算好并存成模块级常量，因此 CLI / Web / 测试三方拿到的是同一批值，不会出现"两处各算一遍、结果不一致"。
+
+| 常量 | 值 / 计算方式 | 说明 |
+|------|------|------|
+| `PACKAGE_DIR` | `os.path.dirname(os.path.abspath(__file__))` | 包目录，即 `src/question_notebook/` |
+| `PROJECT_ROOT` | `os.path.dirname(os.path.dirname(PACKAGE_DIR))` | 项目根目录（包目录 → `src/` → 根，往上两级） |
+| `SCHEMA_FILE` | `PACKAGE_DIR/schema.sql` | 包内建表脚本路径 |
+| `TEMPLATE_DIR` | `PACKAGE_DIR/templates` | 包内 Web 模板目录（传给 `Flask(template_folder=...)`） |
+| `DATA_DIR` | 环境变量 `QUESTION_NOTEBOOK_DATA_DIR`（去空白后非空时），否则 `PROJECT_ROOT` | 数据目录 |
+| `BASE_DIR` | `DATA_DIR` | **历史别名**：重组前它指"数据所在目录"，保留此名以便旧引用（及测试）继续可用 |
+| `DATA_FILE` | `DATA_DIR/questions.db` | SQLite 数据库文件路径 |
+| `BACKUP_DIR` | `DATA_DIR/backups` | 备份目录路径 |
+| `EXPORT_DIR` | `DATA_DIR/exports` | CSV 导出目录路径 |
+
+三条规则：
+
+1. 数据默认放在**项目根目录**，与重组前完全一致 → 现有的 `questions.db` 不用搬家，打开就是原来的数据。
+2. 环境变量 `QUESTION_NOTEBOOK_DATA_DIR` 可**整体改写**数据位置（部署到服务器时把数据放到 `/var/lib/...` 之类的持久化目录，升级代码不碰数据）。
+3. 路径只在导入时算一次，是"文件放哪"的**唯一来源**：`models.py` 用 `from .paths import (...)` 取值拷贝，各模块内部一律通过模块属性访问，测试重写 `models.DATA_FILE` 一处即可全局生效。
+
+> ⚠️ **部署提醒**：`DATA_DIR` 的默认值是 `PROJECT_ROOT`，即**包目录往上两级**。在仓库内直接运行或 `pip install -e .` 可编辑安装时，它正好是仓库根目录（本文所有描述均以此为前提）；但若用普通 `pip install .` 把代码装进 `site-packages`，这个"往上两级"就不再是你的项目目录——此时应通过 `QUESTION_NOTEBOOK_DATA_DIR` 显式指定数据目录，让数据与代码分离。
+
+> **为什么不把密钥文件放进包目录**：`.flask_secret` 与 `.auth_salt` 由 `web.py` 写到 `paths.BASE_DIR`（数据目录，默认项目根目录），**刻意不放进** `src/question_notebook/`。包目录是代码，应当保持只读、可被覆盖升级；把密钥写进代码目录既可能因权限失败，也会随代码分发而泄漏（详见 §5.4）。
+
+---
+
+### 5.2 models.py（数据层）
 
 #### 常量
 
 | 常量 | 值 | 说明 |
 |------|-----|------|
-| `BASE_DIR` | `os.path.dirname(os.path.abspath(__file__))` | 脚本所在目录，用于定位数据文件 |
-| `DATA_FILE` | `BASE_DIR/questions.db` | SQLite 数据库文件路径 |
-| `BACKUP_DIR` | `BASE_DIR/backups` | 备份目录路径 |
-| `EXPORT_DIR` | `BASE_DIR/exports` | CSV 导出目录路径 |
+| `BASE_DIR` | `paths.BASE_DIR`（= `paths.DATA_DIR`，默认项目根目录） | 数据所在目录（历史名），用于锁文件 `.data.lock` 与恢复临时文件 |
+| `DATA_FILE` | `DATA_DIR/questions.db` | SQLite 数据库文件路径 |
+| `BACKUP_DIR` | `DATA_DIR/backups` | 备份目录路径 |
+| `EXPORT_DIR` | `DATA_DIR/exports` | CSV 导出目录路径 |
+| `SCHEMA_FILE` / `PACKAGE_DIR` / `PROJECT_ROOT` | 见 §5.1 | 从 `.paths` 重导出，供外部沿用以保持"路径唯一来源" |
 | `DEFAULT_CATEGORY` | `"未分类"` | 默认分类 |
 | `BACKUP_NAME_PATTERN` | `^questions_\d{8}_\d{6}(_\d{6})?\.db$` | 备份文件名白名单（恢复接口校验用） |
 
-> 路径基于脚本文件目录定位，因此**从任意工作目录运行都能正确找到数据文件**。
+> 以上路径常量**定义处**在 `paths.py`（见 §5.1），`models.py` 通过 `from .paths import ...` 取值拷贝。路径基于包目录 / 项目根定位（不再基于"脚本文件目录"），因此**从任意工作目录运行都能正确找到数据文件**。
 
 #### 类 `Question`
 
@@ -321,7 +394,7 @@ FROM questions GROUP BY month ORDER BY month
 | `_row_to_question(row)` | 将 `sqlite3.Row` 转为 `Question`，`is_solved` 经 `bool(row["is_solved"])` 还原 |
 | `_handle_corrupt_db()` | 文件不是有效 SQLite 库时重命名为 `DATA_FILE + ".bak"`，打印告警并返回 `[]` |
 
-> `_SCHEMA_SQL` 在 `models.py` 内联定义，等价于仓库根目录 `schema.sql` 的 `questions` 表与索引部分（`schema.sql` 额外含 `schema_meta` 表，记录 `schema_version` 与 `migrated_at`，仅供迁移脚本 `migrate_to_sqlite.py` 使用）。
+> `_SCHEMA_SQL` 在 `models.py` 内联定义，等价于**包内** `src/question_notebook/schema.sql` 的 `questions` 表与索引部分（`schema.sql` 额外含 `schema_meta` 表，记录 `schema_version` 与 `migrated_at`，仅供迁移脚本 `scripts/migrate_to_sqlite.py` 使用）。内联而非读文件，是为了保证即使 `schema.sql` 丢失（打包遗漏、被单独拷走）程序也能自举建库。
 
 #### 跨进程锁 `data_lock()`
 
@@ -333,7 +406,9 @@ FROM questions GROUP BY month ORDER BY month
 
 ---
 
-### 5.2 question_notebook.py（CLI 界面层）
+### 5.3 cli.py（CLI 界面层）
+
+> **模块名变化**：本模块即重组前的 `question_notebook.py`，内容不变，仅改名并移入包内；导入由 `import models` 改为包内相对导入 `from . import models` + `from .models import (...)`。
 
 > **并发安全**：CLI 与 Web 共享同一份数据文件。CLI 的每个写操作（添加/解决/删除/编辑/恢复）都在 `data_lock()` 内基于**磁盘最新数据**重做，避免覆盖 Web 端刚写入的内容；读操作（查看/搜索/筛选/分类/导出）先调用 `_refresh(questions)` 从磁盘重载，保证看到 Web 端的最新改动。
 
@@ -405,18 +480,24 @@ questions[:] = [q for q in questions if q.id != q_id]
 
 ---
 
-### 5.3 web_app.py（Web 界面层）
+### 5.4 web.py（Web 界面层）
+
+> **模块名变化**：本模块即重组前的 `web_app.py`，已改名并移入包内。
 
 #### 安全配置（启动时）
 
 ```python
-app = Flask(__name__)
+app = Flask(__name__, template_folder=paths.TEMPLATE_DIR)  # 显式指向包内 templates/
 app.json.ensure_ascii = False  # 中文原样输出，不做 \uXXXX 转义
 ```
 
-- **会话密钥**：优先取环境变量 `QUESTION_NOTEBOOK_SECRET`；否则首次运行生成随机密钥并持久化到 `.flask_secret`（重启后登录会话仍有效）。
-- **密码认证**：`QUESTION_NOTEBOOK_PASSWORD` 环境变量设置后启用（`AUTH_ENABLED=True`）。密码不存明文，用 `hashlib.pbkdf2_hmac("sha256", password, salt, 100_000)` 生成哈希，盐持久化到 `.auth_salt`。
+> `template_folder` 是**显式**传入的（不再依赖 Flask 默认在"应用模块所在目录下的 `templates`"查找）：模板已随 Web 层移入包内 `src/question_notebook/templates/`，写明路径更稳妥，将来模块再挪位置也不必排查"模板找不到"。
+
+- **会话密钥**：优先取环境变量 `QUESTION_NOTEBOOK_SECRET`；否则首次运行生成随机密钥并持久化到 `paths.BASE_DIR/.flask_secret`（重启后登录会话仍有效）。
+- **密码认证**：`QUESTION_NOTEBOOK_PASSWORD` 环境变量设置后启用（`AUTH_ENABLED=True`）。密码不存明文，用 `hashlib.pbkdf2_hmac("sha256", password, salt, 100_000)` 生成哈希，盐持久化到 `paths.BASE_DIR/.auth_salt`。
 - **CSRF**：会话级 token（`secrets.token_urlsafe(32)`），通过 `X-CSRF-Token` 请求头校验。
+
+> **密钥文件位置（重组后有意为之）**：`.flask_secret` 与 `.auth_salt` 都写在 `paths.BASE_DIR`（**数据目录**，默认项目根目录），**不再**写在模块文件旁边。因为模块现在住在包目录 `src/question_notebook/` 里，而包目录是代码：应当是只读、可被覆盖升级的；把密钥写进代码目录既可能因权限失败，也会随代码分发泄漏。（旧布局下这两个文件生成在 `web_app.py` 旁，也就是项目根目录，因此路径事实上与现状一致。）
 
 **`_password_verify(password)`**：用 PBKDF2 重算哈希并与存储哈希 `hmac.compare_digest` 比较，防时序攻击。未启用认证时直接返回 `True`。
 
@@ -434,7 +515,7 @@ app.json.ensure_ascii = False  # 中文原样输出，不做 \uXXXX 转义
 
 | 路由函数 | 方法与路径 | 说明 |
 |---------|-----------|------|
-| `index()` | `GET /` | 渲染 `templates/index.html`，注入 csrf_token / auth_enabled / logged_in |
+| `index()` | `GET /` | 渲染包内模板 `templates/index.html`（由 `paths.TEMPLATE_DIR` 定位），注入 csrf_token / auth_enabled / logged_in |
 | `api_auth_status()` | `GET /api/auth-status` | 返回 `{auth_enabled, logged_in}` |
 | `api_csrf()` | `GET /api/csrf` | 下发当前会话的 CSRF token |
 | `api_login()` | `POST /api/login` | 校验密码，写入 `session`，返回新 CSRF token |
@@ -449,18 +530,26 @@ app.json.ensure_ascii = False  # 中文原样输出，不做 \uXXXX 转义
 | `api_restore()` | `POST /api/restore` | 从备份恢复（数据层 `restore_data`，文件名白名单校验） |
 | `api_stats()` | `GET /api/stats` | 聚合统计（分类分布、解决率、按月趋势）；`return jsonify(get_stats())`（`@_require_auth`） |
 
-> 上述导出/备份/恢复/统计相关函数集中在 `web_app.py` 的 `# ---------- 导出 / 备份 / 恢复 / 统计 ----------` 段落下（v0.2.1 起段落注释新增"统计"）。`get_stats` 已加入 `from models import (...)` 块。
+> 上述导出/备份/恢复/统计相关函数集中在 `web.py` 的 `# ---------- 导出 / 备份 / 恢复 / 统计 ----------` 段落下（v0.2.1 起段落注释新增"统计"）。`get_stats` 已加入 `from .models import (...)` 块。
 
 #### 入口
 
 ```python
-if __name__ == "__main__":
+def main():
+    """Web 版启动入口（控制台命令 question-notebook-web 与 python -m question_notebook.web 都调用它）。"""
+    ...
     app.run(debug=False, host='127.0.0.1', port=5000)
+
+
+if __name__ == "__main__":
+    main()
 ```
+
+> v0.3.0 起 `web.py` 也提供了 `main()`（`cli.py` 原本就有）：三条启动路径——`python run_web.py`、`python -m question_notebook.web`、安装后的 `question-notebook-web`——最终都调用同一个 `web.main()`；`if __name__ == "__main__":` 只是简单地转调 `main()`。`main()` 会先打印访问地址与认证状态提示，再启动 `app.run(debug=False, host='127.0.0.1', port=5000)`。
 
 ---
 
-### 5.4 templates/index.html（前端）
+### 5.5 src/question_notebook/templates/index.html（前端）
 
 前端为单页应用，内嵌 CSS 与原生 JavaScript，通过 `fetch` 调用后端 API。含登录页，`fetch` 统一封装携带 CSRF 头并处理 401。
 
@@ -529,9 +618,35 @@ drawCharts(stats) → drawCategoryChart(byCategory) + drawSolveChart(stats)
 
 ---
 
-### 5.5 test_qn.py（测试层）
+### 5.6 tests/test_question_notebook.py（测试层）
 
-使用标准库 `unittest` 编写，三种测试类（数据层 / CLI / Web）全部继承公共基类 `QuestionNotebookTestCase`。运行方式支持 `pytest` 与 `python test_qn.py` 两种（结果一致），当前基线 **37 个用例全部通过**。规范细节见 [STANDARDS.md](STANDARDS.md) 第 3 节。
+> **文件名变化**：本文件即重组前的 `test_qn.py`，已改名并移入 `tests/`。
+
+使用标准库 `unittest` 编写，三种测试类（数据层 / CLI / Web）全部继承公共基类 `QuestionNotebookTestCase`。运行方式支持 `pytest` 与 `python tests/test_question_notebook.py` 两种（结果一致），当前基线 **37 个用例全部通过**。规范细节见 [STANDARDS.md](STANDARDS.md) 第 3 节。
+
+#### 未安装也能导入：测试文件自带的 `sys.path` 引导
+
+采用 `src/` 布局后，`import question_notebook` 默认会失败（`src/` 不在模块搜索路径里），因此测试文件在**导入被测包之前**先自己把 `<项目根>/src` 插进 `sys.path`：
+
+```python
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(TESTS_DIR)
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from question_notebook import cli, models   # noqa: E402  (路径引导必须先执行)
+```
+
+因此 `python tests/test_question_notebook.py` 在"什么都没装"（甚至没装 Flask）时也能直接跑。同一件事有三重冗余保障，属于**有意为之的多重保险**：
+
+| 场景 | 机制 |
+|------|------|
+| 直接运行测试文件 | 文件内的 `sys.path.insert(0, SRC_DIR)` |
+| `pytest` | 仓库根目录 `conftest.py` 在收集测试前插入 `src/` |
+| `pytest`（备用） | `pyproject.toml` 的 `[tool.pytest.ini_options] pythonpath = ["src"]` |
+
+> 正式开发环境推荐 `pip install -e .`（详见 [STANDARDS.md](STANDARDS.md)），但不能把"能跑测试"押在安装成功上——受限环境里 setuptools 缺失或网络不通都会让 editable 安装失败。
 
 #### 公共基类 `QuestionNotebookTestCase(unittest.TestCase)`
 
@@ -545,7 +660,7 @@ drawCharts(stats) → drawCategoryChart(byCategory) + drawSolveChart(stats)
 
 > ⚠️ **为什么不用系统临时目录**：原实现用 `tempfile.mkdtemp()` 把测试数据写到系统临时目录（Windows 为 `%TEMP%`）。沙箱 / 受限 CI 环境下系统临时目录不可写，且部分沙箱会拦截对 `mkdtemp` 所建目录的后续写入，导致 `.data.lock` 报 `PermissionError`。现改为项目内 `.tmp/`（已 gitignore，用例结束自动删除，不污染系统盘）；仅当 `.tmp/` 本身不可写（如只读介质）时，才退回 `tempfile.mkdtemp(prefix="qn_test_")` 兜底。
 
-> 由于 CLI 通过 `models.*` 模块属性在调用时读取路径（见 §4.3），基类**只重定向 `models` 一处**即可让数据层、CLI 层、Web 层测试全部落到同一临时目录，无需双边同步。
+> 由于 CLI 通过 `models.*` 模块属性在调用时读取路径（见 §4.3），且 `models.py` 是 `from .paths import ...` 的值拷贝，基类**只重定向 `models` 一处**即可让数据层、CLI 层、Web 层测试全部落到同一临时目录，无需双边同步。
 
 #### `TestModels(QuestionNotebookTestCase)` — 数据层测试
 
@@ -577,7 +692,7 @@ drawCharts(stats) → drawCategoryChart(byCategory) + drawSolveChart(stats)
 
 #### `TestWeb(QuestionNotebookTestCase)` — Web 层测试（Flask test_client，含认证与 CSRF）
 
-用 `HAS_FLASK` 标志跳过（未装 Flask 时不影响数据层/CLI 测试）。`setUpClass` 设置 `app.config["TESTING"] = True` 并缓存 `test_client`；`setUp` 先调用 `super().setUp()` 完成临时目录重定向，再新建 test_client、`GET /api/csrf` 建立会话并取 CSRF token，通过 `_csrf_json` / `_csrf_put_json` / `_csrf_delete` 辅助方法在请求里带 `X-CSRF-Token` 头。
+用 `HAS_FLASK` 标志跳过（未装 Flask 时不影响数据层/CLI 测试）。Web 模块在各测试方法内**延迟导入**（`from question_notebook import web`），因此包 `__init__` 不加载 Flask 这一点对测试同样成立。`setUpClass` 设置 `app.config["TESTING"] = True` 并缓存 `test_client`；`setUp` 先调用 `super().setUp()` 完成临时目录重定向，再新建 test_client、`GET /api/csrf` 建立会话并取 CSRF token，通过 `_csrf_json` / `_csrf_put_json` / `_csrf_delete` 辅助方法在请求里带 `X-CSRF-Token` 头。
 
 | 类别 | 用例 | 覆盖点 |
 |------|------|--------|
@@ -590,12 +705,40 @@ drawCharts(stats) → drawCategoryChart(byCategory) + drawSolveChart(stats)
 | 认证 | `test_auth_disabled_by_default` | 默认免登录 |
 | 认证 | `test_auth_enabled_requires_login` / `test_logout_clears_session` / `test_login_empty_body_is_400` | 登录成功/失败、登出失效、非法 body |
 
-### 5.6 migrate_to_sqlite.py（一次性迁移脚本）
+### 5.7 scripts/migrate_to_sqlite.py（一次性迁移脚本）
 
-将历史 `questions.json` 迁移到 `questions.db` 的命令行脚本，迁移完成后旧库即用 SQLite 替代。行为：
+> **位置变化**：本脚本即重组前仓库根目录的 `migrate_to_sqlite.py`，已移入 `scripts/` 并加上 `sys.path` 引导。
+
+将历史 `questions.json` 迁移到 `questions.db` 的命令行脚本，迁移完成后旧库即用 SQLite 替代。
+
+运行方式（在项目根目录执行，**无需安装**）：
+
+```bash
+python scripts/migrate_to_sqlite.py             # 执行迁移
+python scripts/migrate_to_sqlite.py --dry-run   # 仅预览，不实际写库
+python scripts/migrate_to_sqlite.py --force     # 覆盖已存在的数据库
+```
+
+路径解析（重组后的关键变化）：
+
+```python
+# 脚本自己把 <项目根>/src 插进 sys.path，再导入本包
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(_SCRIPTS_DIR)     # scripts/ 的上一级 = 项目根
+_SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+
+from question_notebook import paths
+
+BASE_DIR = paths.DATA_DIR                        # 用户数据以项目根为基准（可被环境变量覆盖）
+SCHEMA_FILE = paths.SCHEMA_FILE                  # 建表定义在包内，不再拼 os.path.join(BASE_DIR, "schema.sql")
+```
+
+行为：
 
 - 先把原始 `questions.json` 备份到 `backups/`。
-- 应用 `schema.sql` 建表（含 `questions` 表 + 索引 + `schema_meta`，写入 `schema_version`、`migrated_at`）。
+- 应用**包内**的 `schema.sql`（`paths.SCHEMA_FILE`）建表（含 `questions` 表 + 索引 + `schema_meta`，写入 `schema_version`、`migrated_at`）。
 - 在**单事务**内 `INSERT` 全部问题，**保留原始 ID** 不重新分配。
 - 迁移后回读校验数据一致性。
 - 支持 `--dry-run`（只打印计划不落盘）与 `--force`（目标已存在时覆盖）。
@@ -612,7 +755,7 @@ drawCharts(stats) → drawCategoryChart(byCategory) + drawSolveChart(stats)
 前端 saveEdit()  (fetch POST /api/questions)
       │  body: {title, description, category}
       ▼
-后端 api_add()   (web_app.py)
+后端 api_add()   (web.py)
       │  CSRF 校验（before_request）→ 认证校验（@_require_auth）
       │  _get_json_body() 解析（空/非对象 → 400）
       │  校验 title 非空 → 构造 Question
@@ -650,7 +793,7 @@ load_questions()
 前端展开图表 → toggleCharts() → loadStats()
       │  fetch GET /api/stats  (@_require_auth)
       ▼
-后端 api_stats() (web_app.py)
+后端 api_stats() (web.py)
       │  return jsonify(get_stats())
       ▼
 数据层 get_stats() (models.py)
@@ -669,7 +812,7 @@ load_questions()
 
 ## 7. 数据存储格式
 
-数据存储在项目根目录的 SQLite 数据库文件 `questions.db`，单文件零配置。表结构由 `models.py` 内联的 `_SCHEMA_SQL`（与仓库根目录 `schema.sql` 的 `questions` 表+索引部分一致）定义：
+数据存储在**数据目录**（`paths.DATA_DIR`，默认为项目根目录；可用环境变量 `QUESTION_NOTEBOOK_DATA_DIR` 改写）下的 SQLite 数据库文件 `questions.db`，单文件零配置。表结构由 `models.py` 内联的 `_SCHEMA_SQL`（与包内 `src/question_notebook/schema.sql` 的 `questions` 表+索引部分一致）定义：
 
 ```sql
 CREATE TABLE IF NOT EXISTS questions (
@@ -698,7 +841,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_timestamp ON questions(timestamp);
 | `solution` | TEXT NOT NULL DEFAULT '' | 解决方案，未解决时为空字符串 |
 | `category` | TEXT NOT NULL DEFAULT '未分类' | 分类，缺省 `未分类` |
 
-> `schema.sql` 另含 `schema_meta` 表（`schema_version`、`migrated_at`），仅由一次性迁移脚本 `migrate_to_sqlite.py` 写入。
+> 包内 `schema.sql` 另含 `schema_meta` 表（`schema_version`、`migrated_at`），仅由一次性迁移脚本 `scripts/migrate_to_sqlite.py` 写入。
 
 > **容错**：建表语句幂等（`IF NOT EXISTS`）；若 `questions.db` 不是有效 SQLite 库，加载时自动重命名为 `questions.db.bak` 后重建，**不崩溃**。
 
@@ -745,7 +888,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_timestamp ON questions(timestamp);
 | 依赖 | 版本 | 用途 | 所属模块 |
 |------|------|------|---------|
 | Python | ≥ 3.10（CI 覆盖 3.10 / 3.11 / 3.12 / 3.13） | 运行环境 | 全部 |
-| Flask | `Flask>=2.3`（实际会装最新 3.x） | Web 框架（仅 Web 端需要）；`app.json.ensure_ascii` 需 2.3+ | `web_app.py` |
+| Flask | `Flask>=2.3`（实际会装最新 3.x） | Web 框架（仅 Web 端需要）；`app.json.ensure_ascii` 需 2.3+ | `web.py`（包 `__init__.py` 与 `cli.py` 都不导入它） |
 
 > **声明位置（两处，必须一致）**：运行依赖同时声明在 `pyproject.toml` 的 `[project] dependencies`（**权威来源**）与 `requirements.txt`（等值简写）；开发工具依赖同时声明在 `[project.optional-dependencies] dev` 与 `requirements-dev.txt`。`scripts/check_deps.py` 负责比对两处包名是否一致（不一致则退出码 1），CI 每次都会运行它。规则详见 [STANDARDS.md](STANDARDS.md) 第 1 节。
 
@@ -754,21 +897,22 @@ CREATE INDEX IF NOT EXISTS idx_questions_timestamp ON questions(timestamp);
 | 模块 | 用途 | 所属模块 |
 |------|------|---------|
 | `sqlite3` | SQLite 数据库连接与事务；`get_stats` 额外使用 SQL 聚合（`GROUP BY`、`SUM`、`substr`），均为 SQLite 内建函数，无新增依赖 | `models.py` |
-| `os` | 路径与文件系统操作 | 全部 |
+| `os` | 路径解析与文件系统操作 | `paths.py`（路径解析的唯一来源）、`models.py`、`cli.py`、`web.py`、入口脚本 |
+| `sys` | 模块搜索路径引导（未安装时把 `src/` 插入 `sys.path`）；测试文件用它控制 `sys.exit` 退出码 | `run_cli.py`、`run_web.py`、`conftest.py`、`scripts/migrate_to_sqlite.py`、测试文件 |
 | `re` | 备份文件名白名单正则 | `models.py` |
-| `csv` / `io` | CSV 生成与字节流 | `models.py`、`web_app.py` |
-| `datetime` | 时间戳生成 | `models.py`、`web_app.py` |
-| `shutil` | 文件复制（备份） | `models.py` |
+| `csv` / `io` | CSV 生成与字节流 | `models.py`、`web.py` |
+| `datetime` | 时间戳生成 | `models.py`、`cli.py`、`web.py` |
+| `shutil` | 文件复制（备份） | `models.py`、测试文件 |
 | `tempfile` | 恢复时原子替换的临时文件 | `models.py` |
 | `contextlib` | `data_lock` 上下文管理器 | `models.py` |
 | `fcntl` / `msvcrt` | 跨进程文件锁（Linux/macOS 用 fcntl，Windows 用 msvcrt） | `models.py` |
-| `hashlib` | PBKDF2 密码哈希 | `web_app.py` |
-| `hmac` | 防时序攻击的常量时间比较 | `web_app.py` |
-| `secrets` | 会话密钥与 CSRF token 生成 | `web_app.py` |
+| `hashlib` | PBKDF2 密码哈希 | `web.py` |
+| `hmac` | 防时序攻击的常量时间比较 | `web.py` |
+| `secrets` | 会话密钥与 CSRF token 生成 | `web.py` |
 
 ### 9.2 测试与工程工具依赖
 
-`test_qn.py` 只依赖标准库（无需安装任何第三方包即可运行：`python test_qn.py`）：
+`tests/test_question_notebook.py` 只依赖标准库（无需安装任何第三方包即可运行：`python tests/test_question_notebook.py`）：
 
 | 模块 | 用途 |
 |------|------|
@@ -794,64 +938,148 @@ CREATE INDEX IF NOT EXISTS idx_questions_timestamp ON questions(timestamp);
 > - 开发/测试：`pip install -r requirements-dev.txt`（或用 `pip install -e ".[dev]"`）
 > - 依赖一致性与安装方式的完整说明见 [STANDARDS.md](STANDARDS.md) 第 1 节。
 
+### 9.3 打包与安装（setuptools src 布局）
+
+`pyproject.toml` 中这几处配置是"改建为 src 布局后仍能正确安装"的关键：
+
+```toml
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }        # 包根目录是 src/，不要到别处乱找
+
+[tool.setuptools.packages.find]
+where = ["src"]                     # 在 src/ 下自动发现包
+
+[tool.setuptools.package-data]
+question_notebook = ["templates/*.html", "schema.sql"]   # 非 Python 文件必须显式声明
+```
+
+> ⚠️ **`package-data` 不能省**：`templates/index.html` 与 `schema.sql` 都不是 `.py` 文件，setuptools 默认不会把它们打进 wheel/sdist。漏掉的典型症状是"代码装上了，但网页打不开（找不到模板）/ 建不了表"——Web 端依赖这两项运行必需资源。
+
+安装方式与得到的入口：
+
+| 命令 | 用途 |
+|------|------|
+| `pip install -e .` | 可编辑安装（开发用）：改代码无需重装，同时注册 `question-notebook` / `question-notebook-web` 两个控制台命令 |
+| `pip install -e ".[dev]"` | 同上，并额外安装开发工具（ruff / pytest / coverage） |
+| `pip install .` | 普通安装（部署用） |
+
+控制台命令在 `[project.scripts]` 注册：
+
+```toml
+[project.scripts]
+question-notebook = "question_notebook.cli:main"       # 等价于 python run_cli.py
+question-notebook-web = "question_notebook.web:main"   # 等价于 python run_web.py
+```
+
+> 也就是说：安装前用 `run_cli.py` / `run_web.py`，安装后用控制台命令，两者最终调用的是同一对 `main()`（详见 §10.1）。
+
 ---
 
 ## 10. 运行方式
 
-### 10.1 环境准备
+### 10.1 三种启动方式总览
+
+所有启动方式最终都调用**同一份** `question_notebook.cli.main()` / `question_notebook.web.main()`，不存在两套逻辑：
+
+| 方式 | CLI | Web | 前提 |
+|------|-----|-----|------|
+| **未安装**（刚 `git clone`） | `python run_cli.py` | `python run_web.py` | CLI 零依赖；Web 需已装 Flask |
+| **模块方式** | `python -m question_notebook` | `python -m question_notebook.web` | 需已安装，或 `src/` 已在 `sys.path` 中 |
+| **控制台命令**（安装后） | `question-notebook` | `question-notebook-web` | 先 `pip install -e .`（命令在 `[project.scripts]` 注册） |
+
+> ⚠️ **`python -m question_notebook` 在未安装时不可用**：src 布局下代码在 `src/question_notebook/`，而 `src/` 不在 `sys.path` 里，未安装直接运行会报 `ModuleNotFoundError: No module named 'question_notebook'`（已实测）。这正是 `run_cli.py` / `run_web.py` 存在的原因——它们只做一件事：把 `<项目根>/src` 插进 `sys.path`，再把控制权交给包里的 `main()`。
+>
+> **不想安装又想用模块方式**：可以写成 `python -m src.question_notebook`（Web 端 `python -m src.question_notebook.web`）。此时 `src/` 被当作命名空间包，包内相对导入依然成立，**未安装也能工作**（两种形式均已实测启动成功）。
+
+### 10.2 环境准备
 
 ```bash
 # 要求 Python 3.10+（CI 在 3.10 / 3.11 / 3.12 / 3.13 上测试）
 python --version
 
-# 安装运行依赖（只有 Flask，版本 >=2.3）
+# 安装运行依赖（只有 Flask，版本 >=2.3）—— 只有 Web 端需要
 pip install -r requirements.txt
 
 # 开发/测试额外安装工具（ruff / pytest / coverage）
 pip install -r requirements-dev.txt
+
+# 可选：以「可编辑」方式安装本项目，从而获得控制台命令与模块方式入口
+pip install -e .
 ```
 
 > 依赖同时声明在 `pyproject.toml` 与 `requirements*.txt` 两处，改依赖需同步修改两处；可用 `python scripts/check_deps.py` 校验一致性（详见 [STANDARDS.md](STANDARDS.md) 第 1 节）。
+>
+> `pip install -e .` 不是必须的：`run_cli.py` / `run_web.py` 与测试文件都自带 `src/` 路径引导，未安装即可运行（详见 §4.2、§5.6）。
 
-### 10.2 启动 CLI
+### 10.3 启动 CLI
 
 ```bash
-python question_notebook.py
+# 方式一：未安装（刚克隆下来就能用，零第三方依赖）
+python run_cli.py
+
+# 方式二：模块方式（需已安装，或 src/ 在 sys.path 中）
+python -m question_notebook
+# 未安装时的等价写法（把 src/ 当命名空间包）：
+python -m src.question_notebook
+
+# 方式三：控制台命令（需先 pip install -e .）
+question-notebook
 ```
 
-### 10.3 启动 Web
+### 10.4 启动 Web
 
 ```bash
-python web_app.py
+# 方式一：未安装（需已装 Flask：pip install -r requirements.txt）
+python run_web.py
+
+# 方式二：模块方式（需已安装，或 src/ 在 sys.path 中）
+python -m question_notebook.web
+# 未安装时的等价写法：
+python -m src.question_notebook.web
+
+# 方式三：控制台命令（需先 pip install -e .）
+question-notebook-web
 ```
 
 启动后浏览器访问 **http://127.0.0.1:5000**。
 
-**启用密码认证（可选）**：局域网/公网部署时设置密码，否则免登录（仅限本机）：
+**启用密码认证（可选）**：局域网/公网部署时设置密码，否则免登录（仅限本机）。三种启动方式都支持该环境变量：
 
 ```bash
 # Linux / macOS
-QUESTION_NOTEBOOK_PASSWORD=你的密码 python web_app.py
+QUESTION_NOTEBOOK_PASSWORD=你的密码 python run_web.py
+QUESTION_NOTEBOOK_PASSWORD=你的密码 question-notebook-web
 
 # Windows (PowerShell)
-$env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python web_app.py
+$env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; python run_web.py
+$env:QUESTION_NOTEBOOK_PASSWORD="你的密码"; question-notebook-web
 ```
 
-可选环境变量：`QUESTION_NOTEBOOK_SECRET` 指定 Flask 会话签名密钥（不设则自动生成 `.flask_secret` 持久化）。
+可选环境变量：
 
-### 10.4 运行测试
+| 环境变量 | 作用 |
+|------|------|
+| `QUESTION_NOTEBOOK_PASSWORD` | 登录密码；不设则免登录（未设时仅建议本机访问） |
+| `QUESTION_NOTEBOOK_SECRET` | Flask 会话签名密钥；不设则自动生成 `paths.BASE_DIR/.flask_secret` 持久化 |
+| `QUESTION_NOTEBOOK_DATA_DIR` | 整体改写数据目录（`questions.db` / `backups/` / `exports/` / 密钥文件的位置）；不设则用项目根目录 |
+
+### 10.5 运行测试
 
 两种方式都支持，结果一致（当前 37 个用例）：
 
 ```bash
-# 方式一：零依赖，只用标准库（无需安装 pytest）
-python test_qn.py
+# 方式一：零依赖，只用标准库（无需安装 pytest，也无需安装本项目）
+python tests/test_question_notebook.py
 
 # 方式二：装了 pytest 后（推荐，输出更清晰，支持筛选 / 重跑失败项）
 pytest
 ```
 
-`python test_qn.py` 会用一个自定义 `unittest.TextTestRunner`（`verbosity=2, buffer=False`）运行全部用例，并在最后打印一行中文汇总，例如：
+`python tests/test_question_notebook.py` 会用一个自定义 `unittest.TextTestRunner`（`verbosity=2, buffer=False`）运行全部用例，并在最后打印一行中文汇总，例如：
 
 ```text
 测试结果：共 37 项 | 通过 37 项 | 失败 0 项 | 错误 0 项 | 跳过 0 项
@@ -859,29 +1087,33 @@ pytest
 
 任一用例失败或报错时进程退出码为 1（全绿为 0），可直接用于脚本/CI 判定。
 
-### 10.5 首次运行行为
+### 10.6 首次运行行为
 
 - 数据库 `questions.db` 首次写入时自动创建（`_ensure_schema` 幂等建表）。
 - 备份目录 `backups/`、导出目录 `exports/` 在相应操作时自动创建。
-- `.flask_secret`（会话密钥）首次运行自动生成；`.auth_salt`（密码盐）启用认证后自动生成。
+- `.flask_secret`（会话密钥）首次运行 Web 端时自动生成；`.auth_salt`（密码盐）启用认证后自动生成；`.data.lock`（跨进程写锁文件）首次写操作时自动生成。
+- 以上运行时文件（含 `questions.db`）都落在**数据目录** `paths.BASE_DIR`（默认为项目根目录；若设置了 `QUESTION_NOTEBOOK_DATA_DIR` 则以该目录为准），**不会**写进代码包 `src/question_notebook/`。因此升级/覆盖代码目录不会碰到用户数据与密钥。
 
 ---
 
 ## 11. 测试说明
 
-- **入口**：`pytest` 或 `python test_qn.py`——两种方式结果一致（37 用例全绿）。前者需装 `pytest`（`pip install -r requirements-dev.txt`），后者只用标准库。规范细节见 [STANDARDS.md](STANDARDS.md) 第 3 节。
-- **测试基类**：全部三个测试类继承 `QuestionNotebookTestCase(unittest.TestCase)`，公共逻辑集中在基类，用例只关心断言。
+- **入口**：`pytest` 或 `python tests/test_question_notebook.py`——两种方式结果一致（37 用例全绿）。前者需装 `pytest`（`pip install -r requirements-dev.txt`），后者只用标准库、且**无需安装本项目**（文件顶部自带 `sys.path` 引导，详见 §5.6）。规范细节见 [STANDARDS.md](STANDARDS.md) 第 3 节。
+- **测试类与命名**：全部三个测试类继承 `QuestionNotebookTestCase(unittest.TestCase)`，公共逻辑集中在基类，用例只关心断言。
   - `TestModels`（数据层 12 例）、`TestCLI`（CLI 层 6 例）、`TestWeb`（Web 层 19 例）均写作 `class Xxx(QuestionNotebookTestCase)`。
+  - 导入方式为 `from question_notebook import cli, models`；Web 层测试在各用例内延迟导入 `from question_notebook import web`，因此未装 Flask 时只跳过 Web 用例。
   - `TestWeb` 额外实现 `setUpClass`（`app.config["TESTING"] = True` + 缓存 test_client）并覆写 `setUp`，先 `super().setUp()` 再做 CSRF 会话准备。
 - **测试隔离**：基类 `setUp` 调用模块级辅助函数 `_make_test_tmpdir()`，在项目内 `.tmp/` 下用 `os.makedirs` + `uuid4().hex[:8]` 随机后缀创建**唯一**临时目录，并重定向 `models.BASE_DIR` / `models.DATA_FILE`（`os.path.join(tmpdir, "questions.db")`）/ `models.BACKUP_DIR` / `models.EXPORT_DIR` 四个路径常量；`tearDown` 用 `shutil.rmtree(..., ignore_errors=True)` 删除，绝不读写真实 `questions.db`。`BASE_DIR` 一并重定向是必需的——恢复路径中 `tempfile.mkstemp(dir=BASE_DIR)` 生成的临时文件须与目标同目录，跨卷 `os.replace` 会失败。
 - **输出降噪**：基类 `setUp` 进入 `contextlib.redirect_stdout(io.StringIO())` 上下文，CLI 菜单与提示语全部写入内存缓冲区，不再刷屏（`print` 的执行本身不受影响）；`tearDown` 退出该上下文恢复标准输出。
 - **输入模拟**：用 `unittest.mock.patch('builtins.input', side_effect=[...])` 依次提供模拟输入。
-- **覆盖范围**：数据层 12 个用例（含 `get_stats` 相关 2 例） + CLI 层 6 个用例 + Web 层 19 个用例（含 `test_stats_endpoint`，含认证与 CSRF），共 **37 个用例**。
+- **覆盖范围**：数据层 12 个用例（含 `get_stats` 相关 2 例） + CLI 层 6 个用例 + Web 层 19 个用例（含 `test_stats_endpoint`，含认证与 CSRF），共 **37 个用例**（`python tests/test_question_notebook.py` 实测：共 37 项 | 通过 37 项 | 失败 0 项 | 错误 0 项 | 跳过 0 项，退出码 0）。
 
-> ⚠️ **已修正（原文档此处有误）**：不需要"双边同步更新 `models.DATA_FILE` 与 `cli.DATA_FILE`"。`question_notebook.py` 用 `import models` 并通过 `models.DATA_FILE` / `models.BACKUP_DIR` / `models.EXPORT_DIR` 在调用时读取路径（`from models import ...` 只导入函数与 `DEFAULT_CATEGORY`），因此基类**只重定向 `models` 模块的属性**即可，`cli` 模块并不持有这些常量的副本。
+> ⚠️ **已修正（原文档此处有误）**：不需要"双边同步更新 `models.DATA_FILE` 与 `cli.DATA_FILE`"。`cli.py` 用 `from . import models` 并通过 `models.DATA_FILE` / `models.BACKUP_DIR` / `models.EXPORT_DIR` 在调用时读取路径（`from .models import ...` 只导入函数与 `DEFAULT_CATEGORY`），因此基类**只重定向 `models` 模块的属性**即可，`cli` 模块并不持有这些常量的副本。
+>
+> 路径常量的**定义处**已从 `models.py` 移到 `paths.py`（v0.3.0 重组），`models.py` 用 `from .paths import ...` 复制进自己的命名空间——"只重定向 `models` 一处"这个前提仍然成立。
 
 > ⚠️ **也不要改回 `tempfile.mkdtemp()` 写系统临时目录**：受限沙箱 / 部分 CI 容器里系统临时目录不可写、且部分沙箱拦截对 `mkdtemp` 目录的写入，会直接报 `PermissionError: ... .data.lock`。`.tmp/` 已在 `.gitignore` 中，保留"项目内自建目录 + 失败时 `tempfile.mkdtemp` 兜底"的现设计。踩坑记录见 [STANDARDS.md](STANDARDS.md) 第 3.4 节。
 
 ---
 
-> 本文档基于源码 v0.2.1 生成，并已同步「工程标准化」改造（`pyproject.toml` / `requirements*.txt` / 共享测试基类 / pytest 双入口 / CI / `STANDARDS.md`）；如代码结构变更请同步更新。
+> 本文档基于源码 **v0.3.0** 生成，已同步「工程标准化」改造（`pyproject.toml` / `requirements*.txt` / 共享测试基类 / pytest 双入口 / CI / `STANDARDS.md`）与 v0.3.0 的**标准 `src/` 包结构重组**（`src/question_notebook/` 代码包、`paths.py` 路径唯一来源、`run_cli.py` / `run_web.py` 未安装入口、控制台命令注册、包内 `schema.sql` 与 `templates/`）；如代码结构变更请同步更新。
