@@ -421,8 +421,14 @@ function closeModal(id) { document.getElementById(id).classList.remove('show'); 
 async function api(url, opts = {}) {
   const headers = Object.assign({}, opts.headers || {});
   headers['X-CSRF-Token'] = __csrf_token;
-  if (opts.body && !(opts.body instanceof FormData) &&
-      !opts.headers || !Object.keys(opts.headers).some(k => k.toLowerCase() === 'content-type')) {
+  // 只有"带 body 且不是 FormData"的请求才需要补 Content-Type: application/json。
+  // 判断顺序很重要：必须先确认 opts.headers 存在，才能对它调用 Object.keys()——
+  // 否则 GET 请求（opts.headers 为 undefined）会在这里抛 TypeError，
+  // 导致请求根本没发出去，页面却显示"服务未启动"这种误导性提示。
+  const hasBody = !!opts.body && !(opts.body instanceof FormData);
+  const hasContentType = !!opts.headers &&
+    Object.keys(opts.headers).some(k => k.toLowerCase() === 'content-type');
+  if (hasBody && !hasContentType) {
     headers['Content-Type'] = 'application/json';
   }
   const res = await fetch(url, Object.assign({}, opts, {
@@ -523,10 +529,11 @@ async function load() {
     loadStats();   // 顺便刷新数据可视化（图表仅在面板展开时绘制）
   } catch (err) {
     if (err.message === '未登录') return;  // 已在 api() 里跳转
-    toast('❌ 加载失败，请确认服务已启动');
+    toast('❌ 加载失败，请查看浏览器控制台（F12）的错误信息');
     console.error('load() 失败:', err);
     document.getElementById('grid').innerHTML =
-      '<div class="empty">加载失败… 请确认 python web_app.py 已启动</div>';
+      '<div class="empty">加载失败。请确认服务仍在运行（终端窗口不要关闭），' +
+      '并打开浏览器控制台（F12）查看具体错误。</div>';
   }
 }
 
