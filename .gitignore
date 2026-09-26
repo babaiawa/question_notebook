@@ -17,3 +17,6 @@ questions.json.bak
 
 # 跨进程锁文件（运行时生成）
 .data.lock
+
+# Flask 会话密钥（首次运行自动生成，不入版本库）
+.flask_secret
