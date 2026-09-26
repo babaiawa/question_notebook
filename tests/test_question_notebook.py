@@ -21,10 +21,12 @@ questions.db。临时目录放在项目内（而非系统临时目录）有两�
   2. 所有测试产物集中在项目内，随时可以整体删除，不污染系统磁盘。
 """
 import contextlib
+import hashlib
 import inspect
 import io
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -452,6 +454,90 @@ class TestCLI(QuestionNotebookTestCase):
         titles = [q.title for q in questions]
         self.assertIn("磁盘新数据", titles)
         self.assertEqual(len(questions), 2)
+
+
+class TestCLIEntryPoint(unittest.TestCase):
+    """以子进程方式验证 CLI 入口真的能启动。
+
+    为什么需要这个类：
+        此前所有 CLI 测试都是"导入 cli 模块 → 直接调函数"，**从未验证入口本身**。
+        也就是说，如果 run_cli.py 的路径引导坏了、或 main() 一启动就崩，
+        39 个测试照样全绿，而用户敲 `python run_cli.py` 会直接看到报错。
+        这类问题只有"真的把程序跑起来"才能发现。
+
+    注意：本类**不继承** QuestionNotebookTestCase。
+        因为子进程不会继承父进程里对 models 路径的内存改写（那只是同一个 Python
+        进程内的事），所以数据隔离必须靠环境变量 QUESTION_NOTEBOOK_DATA_DIR
+        传给子进程。这正是上一条的实测教训。
+    """
+
+    def setUp(self):
+        self.tmpdir = _make_test_tmpdir()
+        self.env = dict(os.environ)
+        self.env["QUESTION_NOTEBOOK_DATA_DIR"] = self.tmpdir
+        self.env["PYTHONIOENCODING"] = "utf-8"  # 保证中文输出可被正确解码
+
+    def tearDown(self):
+        _remove_tmpdir(self.tmpdir)
+
+    def test_entry_point_starts_and_exits_cleanly(self):
+        """python run_cli.py 能启动、打印菜单、并在输入 0 后正常退出（退出码 0）"""
+        proc = subprocess.run(
+            [sys.executable, "run_cli.py"],
+            cwd=PROJECT_ROOT,
+            input="0\n",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=self.env,
+            timeout=60,
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            f"入口应以退出码 0 结束，实际 {proc.returncode}\n"
+            f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+        )
+        self.assertIn(
+            "主菜单", proc.stdout,
+            f"应打印主菜单。实际输出：\n{proc.stdout}\n{proc.stderr}"
+        )
+        # 把 stderr 也纳入失败信息，便于定位（例如导入错误会出现在这里）
+        self.assertNotIn("Traceback", proc.stderr, f"入口不应抛异常：\n{proc.stderr}")
+
+    def test_entry_point_does_not_touch_real_database(self):
+        """入口启动时不得读写项目根目录下真实的 questions.db。
+
+        这是"零安装也能跑"之外的另一条底线：测试无论如何都不能碰到用户真实数据。
+        """
+        real_db = os.path.join(PROJECT_ROOT, "questions.db")
+
+        def fingerprint():
+            if not os.path.exists(real_db):
+                return None
+            st = os.stat(real_db)
+            with open(real_db, "rb") as f:
+                return (st.st_size, st.st_mtime, hashlib.sha256(f.read()).hexdigest())
+
+        before = fingerprint()
+        proc = subprocess.run(
+            [sys.executable, "run_cli.py"],
+            cwd=PROJECT_ROOT,
+            input="1\n0\n",  # 看一次列表（读操作），再退出
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=self.env,
+            timeout=60,
+        )
+        after = fingerprint()
+
+        self.assertEqual(proc.returncode, 0, f"入口异常退出：\n{proc.stderr}")
+        self.assertEqual(
+            before, after,
+            "真实 questions.db 被改动或读取了！测试必须通过 QUESTION_NOTEBOOK_DATA_DIR 完全隔离数据。"
+        )
 
 
 @unittest.skipUnless(HAS_FLASK, "未安装 Flask，跳过 Web 接口测试")

@@ -66,7 +66,31 @@ jobs:
         run: python scripts/check_version.py
 
   # ---------------------------------------------------------------------------
-  # 任务二：自动测试（多 Python 版本矩阵）
+  # 任务二：前端冒烟测试（真实执行页面 JavaScript）
+  #
+  # 为什么单独一个任务：Python 的 test_client 只执行 Python、从不执行 JavaScript，
+  # 前端崩溃对它完全不可见。曾经因此漏掉一个"页面永远显示加载失败"的 bug。
+  # 这个任务用 Node 真的把 index.html 里的脚本跑起来，堵住该盲区。
+  # 用 Node 内置测试能力，无需安装任何第三方包。
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: 前端冒烟测试（Node）
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # 直接运行即可（脚本自带极简测试框架，两种方式都支持）
+      - name: 运行前端冒烟测试
+        run: node tests/js/frontend_smoke.test.js
+
+  # ---------------------------------------------------------------------------
+  # 任务三：自动测试（多 Python 版本矩阵）
   # ---------------------------------------------------------------------------
   test:
     name: 自动测试（Python ${{ matrix.python-version }}）

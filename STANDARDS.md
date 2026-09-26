@@ -157,7 +157,7 @@ question_notebook/                      ← 项目根目录（你 git clone 下�
 │   ├── web.py                          ← 界面层：Flask 路由（原 web_app.py）
 │   ├── schema.sql                      ← 建表定义（代码的一部分，随代码发布）
 │   └── templates/index.html            ← Web 前端页面
-├── tests/test_question_notebook.py     ← 39 个测试用例（原 test_qn.py）
+├── tests/test_question_notebook.py     ← 41 个测试用例（原 test_qn.py）
 └── scripts/check_deps.py  scripts/check_version.py  scripts/migrate_to_sqlite.py
 ```
 
@@ -397,7 +397,7 @@ coverage run -m pytest && coverage report -m   # 看覆盖率 + 未覆盖的行�
 
 ### 4.3 硬性规则
 
-1. **改完代码必须跑测试，全绿才能提交。** 当前基线：**39 个用例全部通过**。
+1. **改完代码必须跑测试，全绿才能提交。** 当前基线：**Python 41 个用例 + 前端 5 个冒烟测试全部通过**。
 2. **测试必须数据隔离。** 新写测试类时，继承 `QuestionNotebookTestCase`（已提供临时目录重定向与输出降噪），不要自己造轮子。测试里对包的引用一律用**绝对导入**：`from question_notebook import cli, models`（原因见 [第 2 节](#2-包结构与导入规范src-布局)）。
 3. **禁止让测试写真实数据。** 测试数据一律落在项目内 `.tmp/` 目录（已 gitignore），用例结束自动删除，绝不碰 `questions.db`。测试通过重写 `models.DATA_FILE` 等常量来重定向路径——所以代码里读路径必须走 `models` 的模块属性，不要自己再拼一遍路径。
 4. **缺陷修复必须配测试。** 修一个 bug 就补一个能复现它的用例——否则同一个坑会再踩一次。
@@ -434,7 +434,7 @@ PermissionError: [Errno 13] Permission denied: '...\.data.lock'
 | 任务 | 内容 |
 | --- | --- |
 | **lint** | 用 `ruff check` 挑写法问题 + 用 `scripts/check_deps.py` 校验依赖声明一致 |
-| **test** | 在 **Python 3.10 / 3.11 / 3.12 / 3.13** 四个版本上各跑一遍 39 个用例，并且**两种运行方式都测**（`pytest` 和 `python tests/test_question_notebook.py`） |
+| **test** | 在 **Python 3.10 / 3.11 / 3.12 / 3.13** 四个版本上各跑一遍 41 个用例，并且**两种运行方式都测**（`pytest` 和 `python tests/test_question_notebook.py`） |
 
 **为什么要在多个 Python 版本上测？** 因为项目声称支持 3.10+，那就必须在每个版本上验证，而不是"我电脑上是 3.14，能跑就算过"。矩阵中某个版本失败时，其他版本会继续跑完（`fail-fast: false`），一次看清全部问题。
 
@@ -455,7 +455,7 @@ PermissionError: [Errno 13] Permission denied: '...\.data.lock'
 
 CI 的配置**只在你推送到 GitHub 之后才会执行**，本机不需要联网。若本机因网络受限装不上 `ruff`/`pytest`，可以：
 
-- 日常验证用 `python tests/test_question_notebook.py`（零依赖，能跑通 39 个用例）；
+- 日常验证用 `python tests/test_question_notebook.py`（零依赖，能跑通 41 个用例）；
 - 把代码推到 GitHub，看 CI 页面的结果来确认 ruff 是否通过。
 
 > 顺带一提：可编辑安装 `pip install -e .` 同样依赖网络与 setuptools，本机装不上时**不影响开发和测试**——
@@ -611,7 +611,7 @@ git config commit.template .gitmessage
 git clone https://github.com/babaiawa/question_notebook.git
 cd question_notebook
 pip install -r requirements.txt
-python tests/test_question_notebook.py   # 应看到"通过 39 项"，说明环境没问题
+python tests/test_question_notebook.py   # 应看到"通过 41 项"，说明环境没问题
                                          # （这一步连依赖都不用装：只用 Python 标准库）
                                          # 若没装 Flask，Web 相关用例会自动跳过而不是失败
 
@@ -653,7 +653,7 @@ git push
 ```bash
 # 1. 先写一个能复现 bug 的测试（此时它应该失败）
 # 2. 改代码让测试通过
-# 3. 确认 39+1 个用例全绿
+# 3. 确认 41+1 个用例全绿
 git commit -m "fix(cli): 修复搜索后数据未从磁盘刷新"
 ```
 
@@ -693,7 +693,7 @@ python scripts/migrate_to_sqlite.py --force     # 覆盖已存在的数据库（
 
 每次准备提交前，逐条打勾：
 
-- [ ] `python tests/test_question_notebook.py` 显示**全部通过**（当前基线 39 项，新增功能后应 ≥ 39）
+- [ ] `python tests/test_question_notebook.py` 显示**全部通过**（当前基线 41 项，新增功能后应 ≥ 41）
 - [ ] 若装了 ruff：`ruff check .` 无报错
 - [ ] 新增/删除了依赖？→ 同步改了 `pyproject.toml` 与 `requirements.txt`，并跑了 `python scripts/check_deps.py`
 - [ ] 新增了非 `.py` 资源（模板、SQL…）？→ 在 `[tool.setuptools.package-data]` 里声明了它
@@ -725,7 +725,8 @@ python scripts/migrate_to_sqlite.py --force     # 覆盖已存在的数据库（
 | `src/question_notebook/web.py` | Flask 网页界面（原 `web_app.py`） |
 | `src/question_notebook/schema.sql` | SQLite 表结构定义（随包发布） |
 | `src/question_notebook/templates/index.html` | Web 前端页面（随包发布） |
-| `tests/test_question_notebook.py` | 39 个测试用例（数据隔离 + 输出降噪；原 `test_qn.py`） |
+| `tests/test_question_notebook.py` | 41 个 Python 测试用例（数据隔离 + 输出降噪；原 `test_qn.py`） |
+| `tests/js/frontend_smoke.test.js` | 5 个前端冒烟测试（真实执行页面 JavaScript，堵住"测试全绿但页面不可用"的盲区） |
 | `.editorconfig` | 编辑器格式统一约定 |
 | `.gitignore` | 排除私人数据、缓存、临时产物 |
 | `.gitmessage` | 提交信息模板 |
