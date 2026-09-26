@@ -181,7 +181,7 @@ Web 版提供 RESTful API，所有接口返回 JSON（中文原样输出，无 `
 
 ## 测试
 
-项目内置 **37 个自动化测试**（数据层 12 + CLI 6 + Web 19），两种运行方式结果一致：
+项目内置 **39 个自动化测试**（数据层 14 + CLI 6 + Web 19），两种运行方式结果一致：
 
 ```bash
 python tests/test_question_notebook.py   # 推荐日常用：零依赖，只需 Python 标准库
@@ -210,7 +210,7 @@ question_notebook/
 │   ├── schema.sql             # SQLite 表结构定义
 │   └── templates/index.html   # Web 前端页面
 │
-├── tests/test_question_notebook.py   # 37 个自动化测试
+├── tests/test_question_notebook.py   # 39 个自动化测试
 ├── scripts/
 │   ├── check_deps.py          # 依赖声明一致性校验（CI 使用）
 │   └── migrate_to_sqlite.py   # JSON → SQLite 一次性迁移脚本

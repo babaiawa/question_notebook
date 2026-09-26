@@ -157,7 +157,7 @@ question_notebook/                      ← 项目根目录（你 git clone 下�
 │   ├── web.py                          ← 界面层：Flask 路由（原 web_app.py）
 │   ├── schema.sql                      ← 建表定义（代码的一部分，随代码发布）
 │   └── templates/index.html            ← Web 前端页面
-├── tests/test_question_notebook.py     ← 37 个测试用例（原 test_qn.py）
+├── tests/test_question_notebook.py     ← 39 个测试用例（原 test_qn.py）
 └── scripts/check_deps.py  scripts/check_version.py  scripts/migrate_to_sqlite.py
 ```
 
@@ -323,11 +323,42 @@ ruff format .           # 按统一风格重新排版
 | 配置 | 内容 | 为什么 |
 | --- | --- | --- |
 | `[tool.ruff] extend-exclude` | `__pycache__`、`templates`、`backups`、`exports` | 前端 HTML 模板不是 Python 代码；后两个是用户数据目录，不该被检查 |
-| `[tool.ruff.lint.isort] known-first-party` | `models`、`question_notebook`、`web_app`、`migrate_to_sqlite` | 告诉 import 排序器"哪些是本项目自己的模块"，好把标准库 / 第三方 / 本项目分成三段 |
-
-> ⚠️ 注意 `known-first-party` 里目前仍留着 `models`、`web_app`、`migrate_to_sqlite` 这几个**旧的顶层模块名**，而 `scripts`、`tests` 并没有列进去——这与重组后的现实并不一致（包内引用现在都走相对导入，用不到这些名字）。此处**照实描述现状**，未擅自改动配置；是否清理属于独立的一次改动。
+| `[tool.ruff.lint.isort] known-first-party` | `question_notebook` | 告诉 import 排序器"哪些是本项目自己的模块"。代码全在包里，包内引用一律走相对导入，所以只有包名一个 |
 
 > 📌 **原则**：CI 里只做 `ruff check`（只报告），**不自动改代码**。机器不该偷偷改你的代码——要自动修，你自己在本机跑 `--fix` 并检查结果。
+
+### 3.4 `# noqa` 怎么用：豁免要精确到"行"
+
+`# noqa: 规则号` 用来告诉 ruff"这一行我知道、是特例、请放过"。它是必要的逃生口，但**用错地方就成了掩盖问题**。判断标准：
+
+| 情形 | 做法 |
+| --- | --- |
+| 这行看起来违规，但背后有真实理由 | 加 `# noqa: 规则号`，**并在注释里写清理由** |
+| 这行确实是无用代码 | 删掉它，不要用 `noqa` 掩盖 |
+
+**本项目的一个实例**（`models.py`）：
+
+```python
+# EXPORT_DIR 本模块自己不使用，但 cli.py 通过 models.EXPORT_DIR 访问它，
+# 所以它属于对外接口，不能删。
+from .paths import BACKUP_DIR, BASE_DIR, DATA_FILE, EXPORT_DIR  # noqa: F401
+```
+
+这里 `F401`（导入了未使用）是**误报**——"未在本文件使用"不等于"对外不需要"。类似的成因还有：
+
+- **注册式代码**：导入一个模块只为触发它里面的注册逻辑。
+- **`__init__.py` 的对外接口重导出**：`from .models import Question` 本身没用到 `Question`，但它定义了包的公开 API。
+
+⚠️ **真实教训**：本项目曾为了消掉这条告警，把 `EXPORT_DIR` 从导入里删掉，结果 `python run_cli.py` 一执行「导出 CSV」就抛 `AttributeError`。更麻烦的是**当时 39 个测试全都测不出来**——因为测试基类在 `setUp` 里自己给 `models` 赋了这些路径属性（用于数据隔离），等于自己造出被测对象再用它验证自己。现在这类"源码级契约"由 `test_models_path_constants_contract` 直接检查源码来把关。
+
+> 所以：**改依赖注入式的接口（模块属性、全局注册表）时，别只信测试通过。** 问一句"测试里的这个属性，是产品代码给的，还是测试自己塞的？"
+
+### 3.5 遇到 ruff 告警的处置顺序
+
+1. 先判断是**真问题**还是**误报**（参考 3.4 的情形表）。
+2. 真问题 → 改代码。
+3. 误报 → 加**行级** `# noqa: 规则号` + 一行理由；不要图省事把整条规则从 `pyproject.toml` 里关掉。
+4. 改完在本机跑 `ruff check .` 自查；本机没装 ruff 时，也可以直接看 CI 结果（CI 会精确报出文件与行号）。
 
 ---
 
@@ -366,7 +397,7 @@ coverage run -m pytest && coverage report -m   # 看覆盖率 + 未覆盖的行�
 
 ### 4.3 硬性规则
 
-1. **改完代码必须跑测试，全绿才能提交。** 当前基线：**37 个用例全部通过**。
+1. **改完代码必须跑测试，全绿才能提交。** 当前基线：**39 个用例全部通过**。
 2. **测试必须数据隔离。** 新写测试类时，继承 `QuestionNotebookTestCase`（已提供临时目录重定向与输出降噪），不要自己造轮子。测试里对包的引用一律用**绝对导入**：`from question_notebook import cli, models`（原因见 [第 2 节](#2-包结构与导入规范src-布局)）。
 3. **禁止让测试写真实数据。** 测试数据一律落在项目内 `.tmp/` 目录（已 gitignore），用例结束自动删除，绝不碰 `questions.db`。测试通过重写 `models.DATA_FILE` 等常量来重定向路径——所以代码里读路径必须走 `models` 的模块属性，不要自己再拼一遍路径。
 4. **缺陷修复必须配测试。** 修一个 bug 就补一个能复现它的用例——否则同一个坑会再踩一次。
@@ -403,7 +434,7 @@ PermissionError: [Errno 13] Permission denied: '...\.data.lock'
 | 任务 | 内容 |
 | --- | --- |
 | **lint** | 用 `ruff check` 挑写法问题 + 用 `scripts/check_deps.py` 校验依赖声明一致 |
-| **test** | 在 **Python 3.10 / 3.11 / 3.12 / 3.13** 四个版本上各跑一遍 37 个用例，并且**两种运行方式都测**（`pytest` 和 `python tests/test_question_notebook.py`） |
+| **test** | 在 **Python 3.10 / 3.11 / 3.12 / 3.13** 四个版本上各跑一遍 39 个用例，并且**两种运行方式都测**（`pytest` 和 `python tests/test_question_notebook.py`） |
 
 **为什么要在多个 Python 版本上测？** 因为项目声称支持 3.10+，那就必须在每个版本上验证，而不是"我电脑上是 3.14，能跑就算过"。矩阵中某个版本失败时，其他版本会继续跑完（`fail-fast: false`），一次看清全部问题。
 
@@ -424,7 +455,7 @@ PermissionError: [Errno 13] Permission denied: '...\.data.lock'
 
 CI 的配置**只在你推送到 GitHub 之后才会执行**，本机不需要联网。若本机因网络受限装不上 `ruff`/`pytest`，可以：
 
-- 日常验证用 `python tests/test_question_notebook.py`（零依赖，能跑通 37 个用例）；
+- 日常验证用 `python tests/test_question_notebook.py`（零依赖，能跑通 39 个用例）；
 - 把代码推到 GitHub，看 CI 页面的结果来确认 ruff 是否通过。
 
 > 顺带一提：可编辑安装 `pip install -e .` 同样依赖网络与 setuptools，本机装不上时**不影响开发和测试**——
@@ -580,7 +611,7 @@ git config commit.template .gitmessage
 git clone https://github.com/babaiawa/question_notebook.git
 cd question_notebook
 pip install -r requirements.txt
-python tests/test_question_notebook.py   # 应看到"通过 37 项"，说明环境没问题
+python tests/test_question_notebook.py   # 应看到"通过 39 项"，说明环境没问题
                                          # （这一步连依赖都不用装：只用 Python 标准库）
                                          # 若没装 Flask，Web 相关用例会自动跳过而不是失败
 
@@ -622,7 +653,7 @@ git push
 ```bash
 # 1. 先写一个能复现 bug 的测试（此时它应该失败）
 # 2. 改代码让测试通过
-# 3. 确认 37+1 个用例全绿
+# 3. 确认 39+1 个用例全绿
 git commit -m "fix(cli): 修复搜索后数据未从磁盘刷新"
 ```
 
@@ -662,7 +693,7 @@ python scripts/migrate_to_sqlite.py --force     # 覆盖已存在的数据库（
 
 每次准备提交前，逐条打勾：
 
-- [ ] `python tests/test_question_notebook.py` 显示**全部通过**（当前基线 37 项，新增功能后应 ≥ 37）
+- [ ] `python tests/test_question_notebook.py` 显示**全部通过**（当前基线 39 项，新增功能后应 ≥ 39）
 - [ ] 若装了 ruff：`ruff check .` 无报错
 - [ ] 新增/删除了依赖？→ 同步改了 `pyproject.toml` 与 `requirements.txt`，并跑了 `python scripts/check_deps.py`
 - [ ] 新增了非 `.py` 资源（模板、SQL…）？→ 在 `[tool.setuptools.package-data]` 里声明了它
@@ -694,7 +725,7 @@ python scripts/migrate_to_sqlite.py --force     # 覆盖已存在的数据库（
 | `src/question_notebook/web.py` | Flask 网页界面（原 `web_app.py`） |
 | `src/question_notebook/schema.sql` | SQLite 表结构定义（随包发布） |
 | `src/question_notebook/templates/index.html` | Web 前端页面（随包发布） |
-| `tests/test_question_notebook.py` | 37 个测试用例（数据隔离 + 输出降噪；原 `test_qn.py`） |
+| `tests/test_question_notebook.py` | 39 个测试用例（数据隔离 + 输出降噪；原 `test_qn.py`） |
 | `.editorconfig` | 编辑器格式统一约定 |
 | `.gitignore` | 排除私人数据、缓存、临时产物 |
 | `.gitmessage` | 提交信息模板 |

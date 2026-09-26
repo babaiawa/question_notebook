@@ -20,24 +20,30 @@ import os
 import secrets
 from functools import wraps
 
+# 名字按字母序排列（含大小写不敏感的"自然序"：DEFAULT_CATEGORY 在 Question 之前），
+# 这是 ruff 的 isort 规则（I001）要求的写法。
 from flask import (
-    Flask, request, jsonify, render_template,
-    send_file, session, abort,
+    Flask,
+    jsonify,
+    render_template,
+    request,
+    send_file,
+    session,
 )
 
 # 数据模型与路径常量统一来自同包的数据层
 from . import paths
 from .models import (
+    DEFAULT_CATEGORY,
     Question,
-    load_questions,
-    save_questions,
-    build_csv,
     backup_data,
-    list_backups,
-    restore_data,
+    build_csv,
     data_lock,
     get_stats,
-    DEFAULT_CATEGORY,
+    list_backups,
+    load_questions,
+    restore_data,
+    save_questions,
 )
 
 # template_folder 显式指向包内 templates/：

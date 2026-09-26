@@ -21,6 +21,7 @@ questions.db。临时目录放在项目内（而非系统临时目录）有两�
   2. 所有测试产物集中在项目内，随时可以整体删除，不污染系统磁盘。
 """
 import contextlib
+import inspect
 import io
 import os
 import shutil
@@ -145,6 +146,48 @@ class QuestionNotebookTestCase(unittest.TestCase):
 
 class TestModels(QuestionNotebookTestCase):
     """数据层测试"""
+
+    def test_models_path_constants_contract(self):
+        """models.py 必须把四个路径常量都导入进来（源码级契约检查）。
+
+        为什么这条测试要读源码、而不在运行时检查 `hasattr(models, name)`：
+            cli.py 用 `models.EXPORT_DIR` 这种**模块属性**读取路径，所以
+            "models 上挂着哪些路径名"是对外契约。但本测试基类在 setUp 里会给
+            models 赋这四个属性（用于数据隔离），于是**任何运行时检查都会被
+            测试自己制造的属性骗过**——哪怕 models.py 里根本没导入它们。
+            实测：把 EXPORT_DIR 从 models.py 的导入里删掉，运行时断言照样通过，
+            而 `python run_cli.py` 一执行「导出 CSV」就抛 AttributeError。
+        因此这里改为直接检查源码中的导入语句——这正是"只有源码才是真相"的一个
+        具体例子（同类问题还有 test_export_respects_export_dir_override 兜底）。
+        """
+        src = inspect.getsource(models)
+        self.assertRegex(
+            src,
+            r"from \.paths import[^\n]*\bEXPORT_DIR\b",
+            "models.py 必须从 .paths 导入 EXPORT_DIR（cli.py 通过 models.EXPORT_DIR 使用它）",
+        )
+        for name in ("DATA_FILE", "BACKUP_DIR", "BASE_DIR"):
+            self.assertRegex(
+                src,
+                rf"from \.paths import[^\n]*\b{name}\b",
+                f"models.py 必须从 .paths 导入 {name}",
+            )
+
+    def test_export_respects_export_dir_override(self):
+        """导出功能必须使用 models.EXPORT_DIR 当前的值（而非某个写死的目录）。
+
+        TestCLI.test_export_csv 验证的是"导出内容带 BOM"；本用例验证"导出位置
+        可被重定向"——测试隔离正是靠这个能力（见 STANDARDS 第 4 节）。
+        """
+        custom = os.path.join(self.tmpdir, "exports_custom")
+        models.EXPORT_DIR = custom
+        questions = [models.Question(title="导出路径测试", category="测试")]
+        models.save_questions(questions)
+
+        cli.export_csv(questions)
+
+        self.assertTrue(os.path.isdir(custom), "导出目录未被创建，说明没有使用 models.EXPORT_DIR")
+        self.assertEqual(len(os.listdir(custom)), 1)
 
     def test_question_roundtrip(self):
         """模型序列化与反序列化往返一致"""
@@ -278,9 +321,14 @@ class TestModels(QuestionNotebookTestCase):
         self.assertEqual(empty["by_category"], [])
 
         # 构造数据：3 条，分 2 类，2 条已解决
+        # （每行只写一条语句：ruff 的 E702 禁止用分号把多条语句挤在一行）
         q1 = models.Question(title="A", category="Bug")
-        q2 = models.Question(title="B", category="Bug"); q2.is_solved = True; q2.solution = "x"
-        q3 = models.Question(title="C", category="文档"); q3.is_solved = True; q3.solution = "y"
+        q2 = models.Question(title="B", category="Bug")
+        q2.is_solved = True
+        q2.solution = "x"
+        q3 = models.Question(title="C", category="文档")
+        q3.is_solved = True
+        q3.solution = "y"
         models.save_questions([q1, q2, q3])
 
         s = models.get_stats()
@@ -692,6 +740,9 @@ class TestWeb(QuestionNotebookTestCase):
             r = c.post('/api/login', json={"password": "pass1"})
             self.assertEqual(r.status_code, 200)
             csrf = r.get_json()["token"]
+            # 登录会清空并重建会话，因此 CSRF token 必须换新——
+            # 若新旧相同，说明会话未重置，存在会话固定（session fixation）风险。
+            self.assertNotEqual(csrf, csrf_before)
             # 登出
             r = c.post('/api/logout', headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 200)

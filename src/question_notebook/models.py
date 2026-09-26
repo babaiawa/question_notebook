@@ -32,10 +32,18 @@ import tempfile
 # 这里用 from ... import 拿到的是**值拷贝**，所以本模块内部一律通过这些模块级
 # 名字访问路径；测试重写 models.DATA_FILE 等即可整体生效（详见 paths.py 注释）。
 #
-# 注意：只导入本模块真正用到的四个（DATA_FILE / BACKUP_DIR / EXPORT_DIR / BASE_DIR）。
+# ⚠️ 为什么 EXPORT_DIR 本模块自己用不到、却必须导入：
+#    cli.py 是通过 `models.EXPORT_DIR` 这个**模块属性**访问它的（见 cli.py 导出 CSV
+#    的两处）。也就是说，"models 模块上挂着哪些路径名"本身就是对外接口的一部分。
+#    曾因"本模块没用到"而删掉这一项，结果执行导出就抛 AttributeError——而当时所有
+#    测试都测不出来，因为它们在 setUp 里自己给 models 赋了这些属性（等于自己造出
+#    被测对象再拿它验证自己）。现在由 test_models_path_constants_contract 做源码级把关。
+#    改动这一行前请先读该用例。
+#
 # PACKAGE_DIR、PROJECT_ROOT 之类需要时请直接从 question_notebook.paths 取，
 # 不必经本模块转发——少一层转发，就少一处将来会忘记同步的地方。
-from .paths import BACKUP_DIR, BASE_DIR, DATA_FILE, EXPORT_DIR
+# 名字按字母序排列（ruff isort 规则 I001 要求）。
+from .paths import BACKUP_DIR, BASE_DIR, DATA_FILE, EXPORT_DIR  # noqa: F401
 
 DEFAULT_CATEGORY = "未分类"
 

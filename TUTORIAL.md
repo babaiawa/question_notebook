@@ -86,7 +86,7 @@ question_notebook/                    ← 项目根目录（你 clone 下来的�
 │       └── index.html                ← Web 前端页面（HTML + CSS + JS）
 │
 ├── tests/
-│   └── test_question_notebook.py     ← 自动化测试（37 个用例）
+│   └── test_question_notebook.py     ← 自动化测试（39 个用例）
 ├── scripts/
 │   ├── check_deps.py                 ← 校验依赖声明一致（CI 用）
 │   └── migrate_to_sqlite.py          ← 旧版 JSON → SQLite 一次性迁移脚本
@@ -811,7 +811,7 @@ web.py ──► 包内 templates/index.html（Flask 渲染模板）
 | `run_cli.py` / `run_web.py` | 入口 | 未安装时把 `src/` 插进 `sys.path`，再调用对应 `main()` |
 | `conftest.py` | 工程 | pytest 收集前把 `src/` 插进 `sys.path` |
 | `templates/index.html` | 前端 | 页面结构 + 样式 + 前端逻辑（含数据可视化） |
-| `tests/test_question_notebook.py` | 测试 | 37 个用例：数据层 12 + CLI 6 + Web 19 |
+| `tests/test_question_notebook.py` | 测试 | 39 个用例：数据层 14 + CLI 6 + Web 19 |
 | `scripts/*.py` | 工具 | 依赖一致性校验、JSON→SQLite 迁移 |
 
 > **一个值得注意的设计**：**Flask 只在 `web.py` 里被导入**，`__init__.py` 和 `cli.py` 都不碰它。
@@ -890,7 +890,7 @@ python tests/test_question_notebook.py   # 推荐日常用：零依赖，只需 
 pytest
 ```
 
-跑一遍，**37 个用例全绿**，就说明这次改动没把已有功能改坏。
+跑一遍，**39 个用例全绿**，就说明这次改动没把已有功能改坏。
 
 **测试文件开头有一段"引导代码"**，作用和 `run_cli.py` 一样（见 0.5）：把 `src/` 加进名单，再导入包。所以**测试不需要安装任何东西**就能跑：
 
@@ -976,7 +976,7 @@ self.c.post('/api/questions', json={...}, headers={"X-CSRF-Token": self._csrf})
 
 本项目的工程规范（依赖管理、代码风格、测试要求、CI、提交信息格式）单独写在 [STANDARDS.md](STANDARDS.md)，含面向新手的名词解释。改代码前后至少记住三件事：
 
-1. 改完先跑 `python tests/test_question_notebook.py`，**37 项必须全绿**；
+1. 改完先跑 `python tests/test_question_notebook.py`，**39 项必须全绿**；
 2. 修 bug 要补一个能复现它的测试用例；
 3. 提交说明按 `类型: 说明` 写（如 `fix(cli): 修复搜索后数据未刷新`），别写 `update`。
 

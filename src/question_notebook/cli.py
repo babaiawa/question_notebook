@@ -12,17 +12,22 @@ import os
 # 包内相对导入：`. ` 表示"同一个包里的兄弟模块"。
 # 相比旧版的 `import models`，这样写的好处是模块名不会和第三方包或标准库撞名，
 # 而且无论从哪里调用，Python 都能准确找到本包内的 models.py。
+#
+# 两种写法各有用途，不是重复：
+#   from . import models        → 拿到"模块对象"，用于 models.DATA_FILE 这种
+#                                 运行时才取值的动态访问（值拷贝陷阱，见 TUTORIAL 4.3）
+#   from .models import 具体名字  → 直接拿到函数/类，调用时不必带 models. 前缀
 from . import models
 from .models import (
-    Question,
-    load_questions,
-    save_questions,
-    build_csv,
-    backup_data,
-    list_backups,
-    restore_data,
-    data_lock,
     DEFAULT_CATEGORY,
+    Question,
+    backup_data,
+    build_csv,
+    data_lock,
+    list_backups,
+    load_questions,
+    restore_data,
+    save_questions,
 )
 
 
