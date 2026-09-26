@@ -1,9 +1,21 @@
 # Question Notebook · 问题笔记本
 
+> ## 📦 本项目已封存（2026-09-26）
+>
+> **封存原因**：产品的核心需求（对每个问题做政治/经济/文化/阶级等**宏观结构性分析**）
+> 需要大量推理 token，成本随问题数量线性增长，**在当前技术条件下不可行**。
+>
+> **代码是可用的**：CLI 与 Web 均能正常运行，测试 41 + 5 项全绿。现有实现是"个人问题笔记本"，
+> 与梳理后的"集体反思平台"方向不一致——这是预期中的。
+>
+> 👉 **重启前请先读 [ARCHIVED.md](ARCHIVED.md)**（封存原因、重启条件、未完成事项）
+> 与 [PRODUCT_SPEC.md](PRODUCT_SPEC.md)（需求已梳理清楚，不必从头再来）。
+
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
 ![Flask](https://img.shields.io/badge/Flask-3.x-000000)
 ![Interface](https://img.shields.io/badge/Interface-CLI%20%2B%20Web-38BDF8)
 ![Storage](https://img.shields.io/badge/Storage-SQLite-003B57)
+![Status](https://img.shields.io/badge/Status-Archived-lightgrey)
 
 个人问题记录与知识管理工具。支持 **命令行（CLI）** 与 **Web 界面** 双端操作，帮助用户系统化地记录学习与工作中遇到的问题、追踪解决进度、沉淀解决方案，并支持分类管理、全文检索、数据备份与导出。
 

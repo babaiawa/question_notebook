@@ -1,5 +1,10 @@
 # Roadmap · 项目路线图
 
+> ## 📦 项目已封存（2026-09-26）
+>
+> 本路线图**暂缓执行**。封存原因与重启条件见 [ARCHIVED.md](ARCHIVED.md)。
+> 重启时先读 [PRODUCT_SPEC.md](PRODUCT_SPEC.md)——需求已梳理清楚，不必从头再来。
+
 > 本文档描述 Question Notebook 的长期发展方向与版本规划。
 > 更新频率：随版本迭代同步更新。
 
