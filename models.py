@@ -168,6 +168,10 @@ def load_questions():
         return [_row_to_question(r) for r in rows]
     except sqlite3.DatabaseError:
         # 文件存在但不是有效 SQLite 库（如历史 JSON 残留、随机字节）
+        # 必须先断开连接再备份：Windows 上文件仍被连接占用时，
+        # _handle_corrupt_db() 里的 os.replace 会报 WinError 32（PermissionError），
+        # 导致损坏库备份不出来。close() 可重复调用，finally 里再关一次是安全的。
+        conn.close()
         return _handle_corrupt_db()
     finally:
         conn.close()
