@@ -5,7 +5,7 @@
 本教程以 Question Notebook 项目为教材，按「先跑起来 → 看懂每一层 → 动手改」的顺序，把整个项目的逻辑和代码讲透。**建议边读边对着源码看**，每读一段就打开对应文件核对一遍，这样理解最扎实。
 
 > 📐 本教程讲「代码为什么这么写」；项目的工程规矩（依赖、代码风格、测试要求、提交格式）在 [STANDARDS.md](STANDARDS.md)。
-> 词汇表式的速查在每课末尾和 [CODE_WIKI.md](CODE_WIKI.md)。
+> 包与导入的速查表见本文末尾「[附：包与导入速查表](#附包与导入速查表)」。
 
 ---
 
@@ -97,7 +97,7 @@ question_notebook/                    ← 项目根目录（你 clone 下来的�
 ├── pyproject.toml                    ← 项目身份证：依赖 + 工具配置 + 启动命令
 ├── requirements.txt                  ← 运行依赖清单（只有 Flask）
 ├── requirements-dev.txt              ← 开发依赖清单（ruff / pytest / coverage）
-└── ...（README / TUTORIAL / ROADMAP / CODE_WIKI / STANDARDS 等文档）
+└── ...（README / TUTORIAL / ROADMAP / STANDARDS 四份文档）
 ```
 
 **为什么要分「src/」和「根目录」？** 这是本课最重要的一节，见 0.5。
@@ -780,8 +780,44 @@ app = Flask(__name__, template_folder=paths.TEMPLATE_DIR)
 解法是抽出 `models.py` 数据层，两个界面共用：
 
 ```
-界面层（CLI / Web）  →  调用  →  数据层（models.py）
+界面层（CLI / Web）  →  调用  →  数据层（models.py）  →  读写  →  questions.db
+                                        ▲
+                                        │ 路径从哪来？
+                                    paths.py
 ```
+
+**完整的模块清单与依赖关系**（谁调用谁，一眼看清）：
+
+```
+run_cli.py ──► cli.py ──┐
+__main__.py ─► cli.py ──┼──► models.py ──► paths.py
+run_web.py ──► web.py ──┘        ▲
+                                 │
+tests/test_question_notebook.py ─┘（导入 cli / models；Web 用例内再延迟导入 web）
+
+web.py ──► 包内 templates/index.html（Flask 渲染模板）
+                 ▲
+                 └── 前端再通过 HTTP / fetch 间接调用 web.py 暴露的 REST API
+```
+
+| 文件 | 层次 | 职责 |
+|------|------|------|
+| `paths.py` | 路径层 | 数据/密钥位置的唯一来源（代码目录与数据目录分离） |
+| `models.py` | 数据层 | `Question` 模型、SQLite 读写、备份/恢复/导出/统计、跨进程锁 |
+| `cli.py` | 界面层 | 命令行菜单与交互 |
+| `web.py` | 界面层 | Flask 路由、认证、CSRF、REST API |
+| `__init__.py` | 包 | 包说明 + 版本号 + 数据层 API 重导出（**不导入 Flask**） |
+| `__main__.py` | 入口 | `python -m question_notebook` → `cli.main()` |
+| `run_cli.py` / `run_web.py` | 入口 | 未安装时把 `src/` 插进 `sys.path`，再调用对应 `main()` |
+| `conftest.py` | 工程 | pytest 收集前把 `src/` 插进 `sys.path` |
+| `templates/index.html` | 前端 | 页面结构 + 样式 + 前端逻辑（含数据可视化） |
+| `tests/test_question_notebook.py` | 测试 | 37 个用例：数据层 12 + CLI 6 + Web 19 |
+| `scripts/*.py` | 工具 | 依赖一致性校验、JSON→SQLite 迁移 |
+
+> **一个值得注意的设计**：**Flask 只在 `web.py` 里被导入**，`__init__.py` 和 `cli.py` 都不碰它。
+> 于是"只装了 Python 标准库、没装 Flask"的机器**照样能用命令行版**，只有启动 Web 时才要求装 Flask。
+> 这叫**依赖按需加载**：不要让一个可选功能把整个程序的可运行性绑架了。测试里也用同样手法——
+> Web 用例延迟到执行时才 `from question_notebook import web`，没装 Flask 就只跳过 Web 用例，其余照跑。
 
 知识点：**单向依赖是可以用代码检查的**。如果有人手一抖在 `models.py` 顶上写下 `from . import cli`，就形成了循环依赖（cli 要 models、models 又要 cli），Python 会在导入时直接报 `ImportError: cannot import name ... (most likely due to a circular import)`。**报错总比悄悄写坏好**——这就是为什么分层规范值得守住。
 

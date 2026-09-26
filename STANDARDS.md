@@ -158,7 +158,7 @@ question_notebook/                      ← 项目根目录（你 git clone 下�
 │   ├── schema.sql                      ← 建表定义（代码的一部分，随代码发布）
 │   └── templates/index.html            ← Web 前端页面
 ├── tests/test_question_notebook.py     ← 37 个测试用例（原 test_qn.py）
-└── scripts/check_deps.py  scripts/migrate_to_sqlite.py
+└── scripts/check_deps.py  scripts/check_version.py  scripts/migrate_to_sqlite.py
 ```
 
 **四条硬性规则**：
@@ -528,19 +528,47 @@ git config commit.template .gitmessage
 
 ## 8. 文档规范
 
+### 8.1 每份文档的职责与更新时机
+
 | 文档 | 写什么 | 什么时候更新 |
 | --- | --- | --- |
-| `README.md` | 项目是什么、怎么用、接口有哪些 | **功能变化时必更**（尤其 API 表与更新日志） |
+| `README.md` | 门面：这是什么、怎么装怎么用、接口有哪些 | **功能变化时必更**（尤其 API 表与更新日志） |
 | `STANDARDS.md`（本文） | 工程规范、提交规范 | 规范变化时 |
 | `ROADMAP.md` | 版本规划与当前进度 | 每个版本开始/结束时 |
-| `TUTORIAL.md` | 面向初学者的代码讲解 | 架构或核心逻辑变化时 |
-| `CODE_WIKI.md` | 代码级详解（模块职责、关键函数） | 模块/函数变化时 |
+| `TUTORIAL.md` | 面向初学者的代码讲解（为什么这么写） | 架构或核心逻辑变化时 |
 
 **规则**：代码改了而文档没改 = 文档在说谎，比没有文档更糟。至少保证 `README.md` 的「API 文档」和「项目结构」与实际一致。
 
 > ⚠️ 目录重构、文件改名、启动命令变化，都是**最容易让文档过期**的改动。这类改动要一次性扫一遍
 > 所有文档与 CI 配置里出现的旧路径（`question_notebook.py`、`web_app.py`、`test_qn.py`、
 > `migrate_to_sqlite.py`、`python -m` 的各种写法），别只改当前正在编辑的那一个文件。
+
+### 8.2 一条硬规矩：同一份知识只允许有一个家
+
+**不要在多份文档里各讲一遍同一件事**，即使措辞不同。违反这条的后果不是"占地方"，而是**必然漂移**——改了 A 忘了 B，文档之间就开始互相矛盾。
+
+判断一份文档该不该存在的标准：**它有没有唯一的、不可替代的用途？**
+
+| 情况 | 处置 |
+|------|------|
+| 某个主题在 3 份以上文档里都被讲过 | 选**最合适的一份**留下完整版，其余改成链接 |
+| 文档内容是在**重述源码**（有哪些函数、参数是什么、路由是什么） | 删掉它——源码才是不会过期的真相；需要时用工具自动生成 |
+| 一份文档同时想当门面、教程、参考、规范 | 拆开，各归其位（见下） |
+
+**为什么"重述源码"最危险**：加一个函数就得记得改文档，忘了文档就在说谎。本项目曾有一份 1100 行的 `CODE_WIKI.md` 承担这个角色，重组后不到一小时它内部就出现了与源码不符的描述（写着 `models` 导入 7 个路径常量，实际只有 4 个）——**这就是它被删除的原因**。
+
+### 8.3 四类文档各写什么（按用途分，不按主题分）
+
+业内通用做法是把文档按"读者此刻要干什么"分成四类，每类语气和写法都不同：
+
+| 类型 | 回答什么 | 语气 | 本项目对应 |
+|------|---------|------|-----------|
+| **教程 Tutorial** | "我要学会它" | 循序渐进、可跟做，允许啰嗦 | `TUTORIAL.md` |
+| **操作指南 How-to** | "我要做某件事" | 只给步骤，不解释原理 | `README` 的安装/启动、`STANDARDS` 第 9 节 |
+| **参考 Reference** | "这个参数/接口是什么" | 精确、表格化、禁止教程化 | `README` 的 API 表、环境变量表 |
+| **解释 Explanation** | "为什么这样设计" | 讲权衡与背景 | `TUTORIAL` 第 4 课、`ROADMAP` |
+
+一个新主题该写进哪份文档，先问"读者拿它是想学会、想照做、想查、还是想理解"，答案就出来了。
 
 ---
 
@@ -581,7 +609,7 @@ python tests/test_question_notebook.py
 ruff check .
 python tests/test_question_notebook.py
 
-# 4. 补文档（README 的 API 表 / 更新日志；目录结构变了还要同步本文第 2 节与 CODE_WIKI）
+# 4. 补文档（README 的 API 表 / 更新日志；目录结构变了还要同步本文第 2 节与 TUTORIAL）
 
 # 5. 提交
 git add -A
@@ -671,9 +699,10 @@ python scripts/migrate_to_sqlite.py --force     # 覆盖已存在的数据库（
 | `.gitignore` | 排除私人数据、缓存、临时产物 |
 | `.gitmessage` | 提交信息模板 |
 | `scripts/check_deps.py` | 依赖声明一致性校验（CI 使用） |
+| `scripts/check_version.py` | 版本号一致性校验：`pyproject.toml` 与 `__version__` 必须相等（CI 使用） |
 | `scripts/migrate_to_sqlite.py` | 旧版 JSON → SQLite 数据迁移 |
 | `.github/workflows/ci.yml` | CI 流水线（lint + 四版本测试矩阵） |
 
 ---
 
-> 相关文档：[README.md](README.md)（项目说明）· [ROADMAP.md](ROADMAP.md)（路线图）· [TUTORIAL.md](TUTORIAL.md)（教学）· [CODE_WIKI.md](CODE_WIKI.md)（代码详解）
+> 相关文档：[README.md](README.md)（项目说明）· [ROADMAP.md](ROADMAP.md)（路线图）· [TUTORIAL.md](TUTORIAL.md)（教学）
